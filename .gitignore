@@ -3,8 +3,10 @@ course_skeleton/
 
 # Data and model artifacts
 data/
+downloads/
 outputs/
 checkpoints/
+submission_snapshot/
 *.tar
 *.pt
 *.pth
@@ -21,7 +23,13 @@ __pycache__/
 wandb/
 runs/
 
+# Large generated inference transcripts
+results/*/test_clean_result.txt
+results/*/test_other_result.txt
+results/smoke/
+
 # OS / editor
 .DS_Store
+.venv/
 .vscode/
 .idea/

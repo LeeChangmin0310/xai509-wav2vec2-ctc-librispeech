@@ -4,9 +4,10 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 
 import glob
 import io
+import itertools
 import os
 import tarfile
-from typing import Dict, Iterable, List, Union
+from typing import Dict, Iterable, List, Optional, Union
 
 import torch
 import torchaudio
@@ -19,12 +20,21 @@ ShardInput = Union[str, Iterable[str]]
 class SizedWebDataset(torch.utils.data.IterableDataset):
     """Wrap a WebDataset pipeline with a sample count for Trainer."""
 
-    def __init__(self, dataset: wds.WebDataset, length: int):
+    def __init__(
+        self,
+        dataset: wds.WebDataset,
+        length: int,
+        max_samples: Optional[int] = None,
+    ):
         self.dataset = dataset
         self.length = length
+        self.max_samples = max_samples
 
     def __iter__(self):
-        return iter(self.dataset)
+        iterator = iter(self.dataset)
+        if self.max_samples is None:
+            return iterator
+        return itertools.islice(iterator, self.max_samples)
 
     def __len__(self):
         return self.length
@@ -48,8 +58,13 @@ def find_shards(shards: ShardInput) -> List[str]:
     return shard_paths
 
 
-def count_samples(shard_paths: Iterable[str]) -> int:
+def count_samples(
+    shard_paths: Iterable[str], max_samples: Optional[int] = None
+) -> int:
     """Count WebDataset sample keys by reading tar headers without extraction."""
+    if max_samples is not None and max_samples <= 0:
+        raise ValueError("max_samples must be greater than zero")
+
     sample_count = 0
     for shard_path in shard_paths:
         with tarfile.open(shard_path, "r:*") as shard:
@@ -59,6 +74,8 @@ def count_samples(shard_paths: Iterable[str]) -> int:
                 if member.isfile() and "." in member.name
             }
         sample_count += len(keys)
+        if max_samples is not None and sample_count >= max_samples:
+            return max_samples
     return sample_count
 
 
@@ -94,6 +111,7 @@ def make_dataset(
     do_tokenization: bool = True,
     shuffle: bool = False,
     shuffle_buffer: int = 1000,
+    max_samples: Optional[int] = None,
 ) -> SizedWebDataset:
     """Create a sized WebDataset pipeline from final tar shards."""
     shard_paths = find_shards(shards)
@@ -111,4 +129,8 @@ def make_dataset(
         )
         .map(lambda sample: preprocess_sample(sample, processor, do_tokenization))
     )
-    return SizedWebDataset(dataset, count_samples(shard_paths))
+    return SizedWebDataset(
+        dataset,
+        count_samples(shard_paths, max_samples=max_samples),
+        max_samples=max_samples,
+    )

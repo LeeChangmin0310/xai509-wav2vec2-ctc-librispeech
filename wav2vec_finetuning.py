@@ -35,10 +35,26 @@ def parse_args():
     parser.add_argument("--per_device_train_batch_size", type=int, default=8)
     parser.add_argument("--per_device_eval_batch_size", type=int, default=8)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    parser.add_argument(
+        "--max_train_steps",
+        type=int,
+        default=-1,
+        help="Stop after this many optimizer steps. Values <= 0 use epochs.",
+    )
+    parser.add_argument(
+        "--max_eval_samples",
+        type=int,
+        help="Limit validation samples for smoke tests.",
+    )
     parser.add_argument("--freeze_feature_encoder", action="store_true")
     parser.add_argument("--freeze_n_layers", type=int, default=0)
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--dry_run",
+        action="store_true",
+        help="Validate shard paths and print the plan without loading a model.",
+    )
     return parser.parse_args()
 
 
@@ -141,11 +157,32 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
+    if args.dry_run:
+        shard_sets = {
+            "train": args.train_shards,
+            "test-clean": args.test_clean_shards,
+            "test-other": args.test_other_shards,
+        }
+        for split, shards in shard_sets.items():
+            paths = sample_util.find_shards(shards)
+            print(f"{split}: {len(paths)} shard(s)")
+        print(
+            "Dry run complete: "
+            f"model={args.model_name_or_path}, output_dir={args.output_dir}, "
+            f"max_train_steps={args.max_train_steps}, "
+            f"max_eval_samples={args.max_eval_samples}"
+        )
+        return
+
     processor = AutoProcessor.from_pretrained(args.model_name_or_path)
     train_dataset = sample_util.make_dataset(
         args.train_shards, processor, shuffle=True
     )
-    test_clean_dataset = sample_util.make_dataset(args.test_clean_shards, processor)
+    test_clean_dataset = sample_util.make_dataset(
+        args.test_clean_shards,
+        processor,
+        max_samples=args.max_eval_samples,
+    )
 
     model = AutoModelForCTC.from_pretrained(
         args.model_name_or_path,
@@ -154,6 +191,7 @@ def main():
     )
     freeze_model_layers(model, args.freeze_feature_encoder, args.freeze_n_layers)
 
+    bounded_run = args.max_train_steps > 0
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
@@ -161,10 +199,13 @@ def main():
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
+        max_steps=args.max_train_steps,
         fp16=args.fp16,
         seed=args.seed,
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
+        evaluation_strategy="steps" if bounded_run else "epoch",
+        save_strategy="steps" if bounded_run else "epoch",
+        eval_steps=args.max_train_steps if bounded_run else None,
+        save_steps=args.max_train_steps if bounded_run else 500,
         logging_strategy="steps",
         logging_steps=10,
         save_total_limit=2,

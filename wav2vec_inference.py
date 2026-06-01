@@ -21,8 +21,18 @@ def parse_args():
     parser.add_argument("--model_name_or_path", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--per_device_eval_batch_size", type=int, default=8)
+    parser.add_argument(
+        "--max_test_samples",
+        type=int,
+        help="Limit samples per test split for smoke tests.",
+    )
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--dry_run",
+        action="store_true",
+        help="Validate shard paths and print the plan without loading a model.",
+    )
     return parser.parse_args()
 
 
@@ -67,8 +77,23 @@ def main():
     """Transcribe both evaluation splits."""
     args = parse_args()
     set_seed(args.seed)
-    os.makedirs(args.output_dir, exist_ok=True)
 
+    if args.dry_run:
+        shard_sets = {
+            "test-clean": args.test_clean_shards,
+            "test-other": args.test_other_shards,
+        }
+        for split, shards in shard_sets.items():
+            paths = sample_util.find_shards(shards)
+            print(f"{split}: {len(paths)} shard(s)")
+        print(
+            "Dry run complete: "
+            f"model={args.model_name_or_path}, output_dir={args.output_dir}, "
+            f"max_test_samples={args.max_test_samples}"
+        )
+        return
+
+    os.makedirs(args.output_dir, exist_ok=True)
     processor = AutoProcessor.from_pretrained(args.model_name_or_path)
     model = AutoModelForCTC.from_pretrained(args.model_name_or_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -77,10 +102,16 @@ def main():
 
     datasets = {
         "test_clean_result.txt": sample_util.make_dataset(
-            args.test_clean_shards, processor, do_tokenization=False
+            args.test_clean_shards,
+            processor,
+            do_tokenization=False,
+            max_samples=args.max_test_samples,
         ),
         "test_other_result.txt": sample_util.make_dataset(
-            args.test_other_shards, processor, do_tokenization=False
+            args.test_other_shards,
+            processor,
+            do_tokenization=False,
+            max_samples=args.max_test_samples,
         ),
     }
     for filename, dataset in datasets.items():

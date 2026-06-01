@@ -23,6 +23,7 @@ GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
 SEED="${SEED:-42}"
 FP16="${FP16:-0}"
 FORCE="${FORCE:-0}"
+GPU_ID="${GPU_ID:-0}"
 
 mkdir -p "$OUTPUTS_DIR" "$LOGS_DIR" "$RESULTS_DIR"
 
@@ -33,6 +34,7 @@ fi
 
 has_checkpoint() {
   local output_dir="$1"
+  [[ -d "$output_dir" ]] || return 1
   [[ -f "$output_dir/final_model/config.json" ]] || \
     find "$output_dir" -maxdepth 2 -type f \
       -path '*/checkpoint-*/config.json' -print -quit | grep -q .
@@ -41,6 +43,7 @@ has_checkpoint() {
 resolve_model_path() {
   local output_dir="$1"
   local checkpoint
+  [[ -d "$output_dir" ]] || return 1
   if [[ -f "$output_dir/final_model/config.json" ]]; then
     printf '%s\n' "$output_dir/final_model"
     return 0
@@ -52,6 +55,10 @@ resolve_model_path() {
   )"
   [[ -n "$checkpoint" ]] || return 1
   printf '%s\n' "$checkpoint"
+}
+
+require_data() {
+  bash "$SCRIPT_DIR/check_data.sh"
 }
 
 run_training() {
@@ -77,5 +84,5 @@ run_training() {
     --gradient_accumulation_steps "$GRADIENT_ACCUMULATION_STEPS" \
     --seed "$SEED" \
     "${FP16_ARGS[@]}" \
-    "$@" 2>&1 | tee "$LOGS_DIR/$experiment.log"
+    "$@" 2>&1 | tee -a "$LOGS_DIR/$experiment.log"
 }

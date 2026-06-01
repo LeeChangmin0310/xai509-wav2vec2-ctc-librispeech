@@ -1,0 +1,27 @@
+# Original course skeleton
+course_skeleton/
+
+# Data and model artifacts
+data/
+outputs/
+checkpoints/
+*.tar
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+# Logs and caches
+logs/
+.cache/
+__pycache__/
+*.pyc
+*.log
+wandb/
+runs/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

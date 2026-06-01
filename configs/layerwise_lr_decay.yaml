@@ -1,0 +1,9 @@
+experiment: layerwise_lr_decay
+train_setting: layerwise_lr_decay
+learning_rate: 5.0e-5
+head_learning_rate: 1.0e-4
+layerwise_lr_decay: true
+layerwise_lr_decay_rate: 0.9
+freeze_setting: feature_extractor
+feature_extractor_learning_rate: null
+decoding_method: greedy

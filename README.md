@@ -1,8 +1,8 @@
 # XAI 509 Wav2Vec2 CTC Project
 
 This project fine-tunes Wav2Vec 2.0 with the provided custom CTC loss, runs
-inference on LibriSpeech `test-clean` and `test-other`, and records WER for six
-required experiments.
+inference on LibriSpeech `test-clean` and `test-other`, and records WER for
+seven training experiments plus optional beam decoding.
 
 Final WebDataset `.tar` shards are read directly. Do not extract them.
 
@@ -33,8 +33,12 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-`pyctcdecode` is optional and only needed for later language-model-assisted
-decoding experiments.
+`pyctcdecode` is optional and only needed for beam decoding. The included beam
+path works without KenLM:
+
+```bash
+python -m pip install pyctcdecode
+```
 
 ## Data Layout
 
@@ -111,7 +115,7 @@ logs/smoke_inference_eval.log
 
 ## Single-GPU RTX 3090 Queue
 
-After smoke tests pass, launch all six experiments sequentially on one GPU:
+After smoke tests pass, launch all seven experiments sequentially on one GPU:
 
 ```bash
 GPU_ID=0 FP16=1 CONTINUE_ON_ERROR=1 bash scripts/run_queue_3090.sh
@@ -138,6 +142,11 @@ The required queue order is:
 | `freeze_feature_lr1e-4` | `1e-4` | Feature encoder |
 | `freeze3_lr1e-4` | `1e-4` | First 3 encoder layers |
 | `freeze6_lr1e-4` | `1e-4` | First 6 encoder layers |
+| `layerwise_lr_decay` | encoder top: `5e-5`, head: `1e-4` | Feature extractor |
+
+The layer-wise experiment applies a `0.9` LR multiplier while moving from
+upper to lower Transformer layers. Its feature extractor is frozen because no
+`--feature_extractor_learning_rate` is supplied.
 
 ## Individual Runs
 
@@ -147,8 +156,24 @@ The original individual scripts remain available:
 FP16=1 bash scripts/run_baseline.sh
 FP16=1 bash scripts/run_lr_sweep.sh
 FP16=1 bash scripts/run_freeze_sweep.sh
+FP16=1 bash scripts/run_layerwise_lr.sh
 FP16=1 bash scripts/run_inference.sh baseline_lr1e-4
 bash scripts/run_eval.sh baseline_lr1e-4
+```
+
+Optional beam decoding is intentionally separate from the queue. It defaults
+to the baseline checkpoint and saves a distinct `<experiment>_beam` result:
+
+```bash
+python -m pip install pyctcdecode
+BEST_EXPERIMENT=baseline_lr1e-4 GPU_ID=0 bash scripts/run_beam_decode.sh
+```
+
+Override the beam width when needed:
+
+```bash
+BEST_EXPERIMENT=layerwise_lr_decay BEAM_WIDTH=50 GPU_ID=0 \
+bash scripts/run_beam_decode.sh
 ```
 
 Training supports:
@@ -168,12 +193,20 @@ Training supports:
 --max_eval_samples
 --freeze_feature_encoder
 --freeze_n_layers
+--layerwise_lr_decay
+--layerwise_lr_decay_rate
+--head_learning_rate
+--feature_extractor_learning_rate
 --fp16
 --seed
 --dry_run
 ```
 
-Inference additionally supports `--max_test_samples` and `--dry_run`.
+Inference additionally supports `--max_test_samples`,
+`--decoding_method greedy|beam`, `--beam_width`, and `--dry_run`. Greedy
+decoding remains the default.
+
+The documentation-only experiment definitions are stored under `configs/`.
 
 ## Outputs
 
@@ -183,6 +216,7 @@ Generated artifacts use this structure:
 outputs/<experiment_name>/
 logs/<experiment_name>.log
 results/<experiment_name>/
+results/<experiment_name>/metadata.json
 results/wer_summary.csv
 results/wer_summary.md
 results/figures/wer_barplot.png
@@ -212,9 +246,11 @@ Generate a fixed-order Markdown table and a bar plot:
 python scripts/summarize_results.py
 ```
 
-The best `test-clean` and `test-other` WER values are bolded in
-`results/wer_summary.md`. The plot is skipped gracefully if matplotlib is not
-installed.
+The CSV and Markdown summary support training settings, decoding method,
+learning rate, freezing, layer-wise decay, beam width, WER values, and
+checkpoint paths. The best `test-clean` and `test-other` WER values are bolded
+in `results/wer_summary.md`. The plot is skipped gracefully if matplotlib is
+not installed.
 
 ## Submission Snapshot
 
@@ -242,6 +278,8 @@ artifacts.
   and completed inference files are skipped unless `FORCE=1`.
 - Model download errors: make sure the Hugging Face cache is writable and the
   initial `facebook/wav2vec2-base` download can reach the network.
+- Beam dependency errors: install `pyctcdecode`. KenLM is not required for the
+  provided beam decoding script.
 - Queue failures: inspect `logs/failed_experiments.txt` and the corresponding
   `logs/<experiment_name>.log`.
 

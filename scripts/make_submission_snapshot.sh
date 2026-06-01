@@ -37,6 +37,7 @@ cp "$PROJECT_ROOT/environment.yml" "$SNAPSHOT_DIR/"
 find "$PROJECT_ROOT" -maxdepth 1 -type f -name '*.py' -exec cp {} "$SNAPSHOT_DIR/" \;
 
 copy_tree_without_weights "$PROJECT_ROOT/scripts" "$SNAPSHOT_DIR/scripts"
+copy_tree_without_weights "$PROJECT_ROOT/configs" "$SNAPSHOT_DIR/configs"
 copy_tree_without_weights "$PROJECT_ROOT/reports" "$SNAPSHOT_DIR/reports"
 
 mkdir -p "$SNAPSHOT_DIR/results"

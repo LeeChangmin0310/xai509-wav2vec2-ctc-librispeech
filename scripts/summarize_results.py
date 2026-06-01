@@ -15,6 +15,7 @@ EXPERIMENT_ORDER = [
     "freeze_feature_lr1e-4",
     "freeze3_lr1e-4",
     "freeze6_lr1e-4",
+    "layerwise_lr_decay",
 ]
 
 
@@ -51,12 +52,17 @@ def parse_score(value: str) -> Optional[float]:
 def sorted_rows(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Sort known experiments first, followed by any additional rows."""
     order = {name: index for index, name in enumerate(EXPERIMENT_ORDER)}
+
+    def sort_key(row: Dict[str, str]):
+        experiment = row.get("experiment", "")
+        if experiment.endswith("_beam"):
+            source_experiment = experiment[: -len("_beam")]
+            return (order.get(source_experiment, len(order)), 1, experiment)
+        return (order.get(experiment, len(order)), 0, experiment)
+
     return sorted(
         rows,
-        key=lambda row: (
-            order.get(row.get("experiment", ""), len(order)),
-            row.get("experiment", ""),
-        ),
+        key=sort_key,
     )
 
 
@@ -84,16 +90,24 @@ def write_markdown(rows: List[Dict[str, str]], output_md: Path):
     lines = [
         "# WER Summary",
         "",
-        "| Experiment | test-clean WER | test-other WER |",
-        "| --- | ---: | ---: |",
+        "| Experiment | Train setting | Decoding | LR | Freeze setting | "
+        "Layer-wise decay | Beam width | test-clean WER | test-other WER | Checkpoint |",
+        "| --- | --- | --- | ---: | --- | --- | ---: | ---: | ---: | --- |",
     ]
     for row in rows:
         clean = parse_score(row.get("test_clean_wer", ""))
         other = parse_score(row.get("test_other_wer", ""))
         lines.append(
             f"| `{row.get('experiment', '')}` | "
+            f"{row.get('train_setting', '')} | "
+            f"{row.get('decoding_method', '')} | "
+            f"{row.get('learning_rate', '')} | "
+            f"{row.get('freeze_setting', '')} | "
+            f"{row.get('layerwise_lr_decay', '')} | "
+            f"{row.get('beam_width', '')} | "
             f"{format_score(clean, best_clean)} | "
-            f"{format_score(other, best_other)} |"
+            f"{format_score(other, best_other)} | "
+            f"`{row.get('checkpoint_path', '')}` |"
         )
     lines.extend(["", "Best values are shown in bold.", ""])
     output_md.parent.mkdir(parents=True, exist_ok=True)

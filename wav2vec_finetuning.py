@@ -5,7 +5,7 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 import argparse
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Set, Union
 
 import numpy as np
 import torch
@@ -48,6 +48,27 @@ def parse_args():
     )
     parser.add_argument("--freeze_feature_encoder", action="store_true")
     parser.add_argument("--freeze_n_layers", type=int, default=0)
+    parser.add_argument(
+        "--layerwise_lr_decay",
+        action="store_true",
+        help="Use lower learning rates for lower Wav2Vec2 encoder layers.",
+    )
+    parser.add_argument(
+        "--layerwise_lr_decay_rate",
+        type=float,
+        default=0.9,
+        help="Multiplier applied while moving from upper to lower encoder layers.",
+    )
+    parser.add_argument(
+        "--head_learning_rate",
+        type=float,
+        help="Learning rate for the CTC head in layer-wise decay mode.",
+    )
+    parser.add_argument(
+        "--feature_extractor_learning_rate",
+        type=float,
+        help="Optional feature extractor LR. Omit it to freeze the extractor.",
+    )
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -152,9 +173,113 @@ def freeze_model_layers(model, freeze_feature_encoder: bool, freeze_n_layers: in
             parameter.requires_grad = False
 
 
+def validate_layerwise_args(args):
+    """Validate optional layer-wise learning-rate settings."""
+    optional_lrs = (args.head_learning_rate, args.feature_extractor_learning_rate)
+    if not args.layerwise_lr_decay and any(lr is not None for lr in optional_lrs):
+        raise ValueError(
+            "--head_learning_rate and --feature_extractor_learning_rate require "
+            "--layerwise_lr_decay"
+        )
+    if args.freeze_feature_encoder and args.feature_extractor_learning_rate is not None:
+        raise ValueError(
+            "--freeze_feature_encoder cannot be combined with "
+            "--feature_extractor_learning_rate"
+        )
+    if not 0.0 < args.layerwise_lr_decay_rate <= 1.0:
+        raise ValueError("--layerwise_lr_decay_rate must be in the interval (0, 1]")
+    if args.layerwise_lr_decay:
+        head_lr = args.head_learning_rate or args.learning_rate
+        if head_lr <= 0.0:
+            raise ValueError("--head_learning_rate must be greater than zero")
+        if head_lr < args.learning_rate:
+            raise ValueError("--head_learning_rate must be at least --learning_rate")
+        if (
+            args.feature_extractor_learning_rate is not None
+            and args.feature_extractor_learning_rate > head_lr
+        ):
+            raise ValueError(
+                "--feature_extractor_learning_rate cannot exceed the CTC head LR"
+            )
+        if (
+            args.feature_extractor_learning_rate is not None
+            and args.feature_extractor_learning_rate <= 0.0
+        ):
+            raise ValueError(
+                "--feature_extractor_learning_rate must be greater than zero"
+            )
+
+
+def build_layerwise_optimizer(model, args) -> torch.optim.Optimizer:
+    """Build AdamW groups with progressively larger LRs toward the CTC head."""
+    head_lr = args.head_learning_rate or args.learning_rate
+    encoder_layers = model.wav2vec2.encoder.layers
+    decay_rate = args.layerwise_lr_decay_rate
+    assigned: Set[int] = set()
+    groups = []
+
+    def add_group(name: str, parameters, learning_rate: float):
+        trainable = [
+            parameter
+            for parameter in parameters
+            if parameter.requires_grad and id(parameter) not in assigned
+        ]
+        if not trainable:
+            return
+        assigned.update(id(parameter) for parameter in trainable)
+        groups.append({"params": trainable, "lr": learning_rate, "group_name": name})
+        print(f"Optimizer group {name}: {len(trainable)} tensors, lr={learning_rate:g}")
+
+    # The CTC projection head receives the largest learning rate.
+    add_group("ctc_head", model.lm_head.parameters(), head_lr)
+
+    # Layer indices increase from the acoustic input toward the CTC head.
+    # Applying more decay to earlier layers keeps lower representations stable.
+    for layer_index, layer in enumerate(encoder_layers):
+        exponent = len(encoder_layers) - 1 - layer_index
+        layer_lr = args.learning_rate * (decay_rate ** exponent)
+        add_group(f"encoder_layer_{layer_index}", layer.parameters(), layer_lr)
+
+    # Shared Wav2Vec2 modules sit below the Transformer stack and use a
+    # conservatively decayed learning rate.
+    shared_lr = args.learning_rate * (decay_rate ** len(encoder_layers))
+    feature_extractor = model.wav2vec2.feature_extractor
+    if args.feature_extractor_learning_rate is None:
+        for parameter in feature_extractor.parameters():
+            parameter.requires_grad = False
+        print("Feature extractor frozen for layer-wise LR decay")
+    else:
+        add_group(
+            "feature_extractor",
+            feature_extractor.parameters(),
+            args.feature_extractor_learning_rate,
+        )
+
+    add_group(
+        "wav2vec2_shared",
+        (
+            parameter
+            for parameter in model.wav2vec2.parameters()
+            if id(parameter) not in assigned
+        ),
+        shared_lr,
+    )
+    add_group(
+        "other_trainable",
+        (
+            parameter
+            for parameter in model.parameters()
+            if id(parameter) not in assigned
+        ),
+        shared_lr,
+    )
+    return torch.optim.AdamW(groups, lr=args.learning_rate, weight_decay=0.0)
+
+
 def main():
     """Load data, train the model, and save a stable final model directory."""
     args = parse_args()
+    validate_layerwise_args(args)
     set_seed(args.seed)
 
     if args.dry_run:
@@ -170,7 +295,8 @@ def main():
             "Dry run complete: "
             f"model={args.model_name_or_path}, output_dir={args.output_dir}, "
             f"max_train_steps={args.max_train_steps}, "
-            f"max_eval_samples={args.max_eval_samples}"
+            f"max_eval_samples={args.max_eval_samples}, "
+            f"layerwise_lr_decay={args.layerwise_lr_decay}"
         )
         return
 
@@ -190,6 +316,9 @@ def main():
         pad_token_id=processor.tokenizer.pad_token_id,
     )
     freeze_model_layers(model, args.freeze_feature_encoder, args.freeze_n_layers)
+    optimizer: Optional[torch.optim.Optimizer] = None
+    if args.layerwise_lr_decay:
+        optimizer = build_layerwise_optimizer(model, args)
 
     bounded_run = args.max_train_steps > 0
     training_args = TrainingArguments(
@@ -224,6 +353,7 @@ def main():
         tokenizer=processor,
         data_collator=DataCollatorCTCWithPadding(processor=processor),
         compute_metrics=build_compute_metrics(processor),
+        optimizers=(optimizer, None) if optimizer is not None else (None, None),
     )
     trainer.train()
 

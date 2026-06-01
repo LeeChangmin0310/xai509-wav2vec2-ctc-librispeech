@@ -16,6 +16,8 @@
 - Wav2Vec2 CTC fine-tuning pipeline
 - Custom CTC loss integration
 - Batched inference and WER evaluation
+- Optional layer-wise LR decay optimizer groups
+- Optional CTC beam decoding without a required language model
 
 ## 3. Experimental Setup
 
@@ -51,10 +53,27 @@
 
 `[Discuss the WER gap and any consistent trends.]`
 
+### 4.5 Layer-Wise Learning-Rate Decay
+
+| Experiment | test-clean WER | test-other WER |
+| --- | ---: | ---: |
+| `layerwise_lr_decay` | `[FILL IN]` | `[FILL IN]` |
+
+`[Discuss whether smaller lower-layer learning rates improved robustness.]`
+
+### 4.6 Optional Beam Decoding
+
+- Selected checkpoint: `[FILL IN]`
+- Beam width: `[FILL IN]`
+- Greedy WER: `[FILL IN]`
+- Beam WER: `[FILL IN]`
+
 ## 5. Discussion
 
 - Effect of learning rate: `[FILL IN]`
 - Effect of freezing: `[FILL IN]`
+- Effect of layer-wise LR decay: `[FILL IN]`
+- Effect of optional beam decoding: `[FILL IN]`
 - Best overall configuration: `[FILL IN]`
 - Limitations: `[FILL IN]`
 

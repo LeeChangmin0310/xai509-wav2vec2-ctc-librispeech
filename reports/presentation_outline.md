@@ -3,7 +3,7 @@
 ## 1. Project Goal
 
 - Fine-tune Wav2Vec 2.0 with the provided custom CTC loss.
-- Compare learning-rate and freezing strategies on LibriSpeech.
+- Compare learning-rate, freezing, and layer-wise LR decay strategies.
 - Evaluate both `test-clean` and `test-other`.
 
 ## 2. Experimental Setup
@@ -40,7 +40,21 @@
 - Observed performance gap: `[FILL IN]`
 - Likely reason for the gap: `[FILL IN]`
 
-## 7. Final Interpretation
+## 7. Layer-Wise LR Decay
+
+| Experiment | test-clean WER | test-other WER |
+| --- | ---: | ---: |
+| `layerwise_lr_decay` | `[FILL IN]` | `[FILL IN]` |
+
+- Comparison against baseline: `[FILL IN]`
+
+## 8. Optional Beam Decoding
+
+- Selected checkpoint: `[FILL IN]`
+- Beam width: `[FILL IN]`
+- Greedy versus beam WER comparison: `[FILL IN]`
+
+## 9. Final Interpretation
 
 - Best experiment: `[FILL IN]`
 - Main result: `[FILL IN]`

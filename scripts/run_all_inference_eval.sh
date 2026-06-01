@@ -10,6 +10,7 @@ experiments=(
   freeze_feature_lr1e-4
   freeze3_lr1e-4
   freeze6_lr1e-4
+  layerwise_lr_decay
 )
 
 for experiment in "${experiments[@]}"; do

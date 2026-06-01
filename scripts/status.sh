@@ -39,6 +39,14 @@ else
 fi
 
 echo
+echo "== Experiment configs =="
+if [[ -d "$PROJECT_ROOT/configs" ]]; then
+  find "$PROJECT_ROOT/configs" -maxdepth 1 -type f -name '*.yaml' -printf '%f\n' | sort
+else
+  echo "(none)"
+fi
+
+echo
 echo "== WER summary =="
 if [[ -f "$PROJECT_ROOT/results/wer_summary.csv" ]]; then
   cat "$PROJECT_ROOT/results/wer_summary.csv"

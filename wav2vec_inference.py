@@ -3,8 +3,9 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import argparse
+import json
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import torch
 from torch.utils.data import DataLoader
@@ -21,6 +22,13 @@ def parse_args():
     parser.add_argument("--model_name_or_path", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--per_device_eval_batch_size", type=int, default=8)
+    parser.add_argument(
+        "--decoding_method",
+        choices=("greedy", "beam"),
+        default="greedy",
+        help="CTC decoding strategy. Beam decoding requires pyctcdecode.",
+    )
+    parser.add_argument("--beam_width", type=int, default=100)
     parser.add_argument(
         "--max_test_samples",
         type=int,
@@ -52,7 +60,47 @@ def build_collate_fn(processor):
     return collate_fn
 
 
-def write_results(dataset, model, processor, device, batch_size, fp16, output_file):
+def build_beam_decoder(processor):
+    """Build a pyctcdecode decoder without requiring an external LM."""
+    try:
+        from pyctcdecode import build_ctcdecoder
+    except ImportError as error:
+        raise RuntimeError(
+            "Beam decoding requires pyctcdecode. Install it with: "
+            "python -m pip install pyctcdecode"
+        ) from error
+
+    vocab = processor.tokenizer.get_vocab()
+    labels = [""] * (max(vocab.values()) + 1)
+    for token, token_id in vocab.items():
+        labels[token_id] = token
+    labels[processor.tokenizer.pad_token_id] = ""
+    delimiter = processor.tokenizer.word_delimiter_token
+    if delimiter in vocab:
+        labels[vocab[delimiter]] = " "
+    return build_ctcdecoder(labels=labels)
+
+
+def decode_logits(logits, processor, decoding_method, decoder, beam_width):
+    """Decode model logits with greedy or optional CTC beam search."""
+    if decoding_method == "greedy":
+        return processor.batch_decode(torch.argmax(logits, dim=-1))
+    logit_batches = logits.detach().cpu().numpy()
+    return [decoder.decode(logit, beam_width=beam_width) for logit in logit_batches]
+
+
+def write_results(
+    dataset,
+    model,
+    processor,
+    device,
+    batch_size,
+    fp16,
+    output_file,
+    decoding_method,
+    decoder=None,
+    beam_width=100,
+):
     """Write REF/HYP pairs for one evaluation split."""
     loader = DataLoader(
         dataset,
@@ -67,7 +115,9 @@ def write_results(dataset, model, processor, device, batch_size, fp16, output_fi
             with torch.no_grad():
                 with torch.cuda.amp.autocast(enabled=use_fp16):
                     logits = model(**batch).logits
-            hypotheses = processor.batch_decode(torch.argmax(logits, dim=-1))
+            hypotheses = decode_logits(
+                logits, processor, decoding_method, decoder, beam_width
+            )
             for reference, hypothesis in zip(references, hypotheses):
                 output.write(f"REF: {reference}\n")
                 output.write(f"HYP: {hypothesis}\n\n")
@@ -76,6 +126,8 @@ def write_results(dataset, model, processor, device, batch_size, fp16, output_fi
 def main():
     """Transcribe both evaluation splits."""
     args = parse_args()
+    if args.beam_width <= 0:
+        raise ValueError("--beam_width must be greater than zero")
     set_seed(args.seed)
 
     if args.dry_run:
@@ -89,13 +141,17 @@ def main():
         print(
             "Dry run complete: "
             f"model={args.model_name_or_path}, output_dir={args.output_dir}, "
-            f"max_test_samples={args.max_test_samples}"
+            f"max_test_samples={args.max_test_samples}, "
+            f"decoding_method={args.decoding_method}, beam_width={args.beam_width}"
         )
         return
 
     os.makedirs(args.output_dir, exist_ok=True)
     processor = AutoProcessor.from_pretrained(args.model_name_or_path)
     model = AutoModelForCTC.from_pretrained(args.model_name_or_path)
+    decoder: Optional[object] = None
+    if args.decoding_method == "beam":
+        decoder = build_beam_decoder(processor)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.eval()
@@ -123,7 +179,23 @@ def main():
             args.per_device_eval_batch_size,
             args.fp16,
             os.path.join(args.output_dir, filename),
+            args.decoding_method,
+            decoder=decoder,
+            beam_width=args.beam_width,
         )
+
+    metadata = {
+        "checkpoint_path": args.model_name_or_path,
+        "decoding_method": args.decoding_method,
+        "beam_width": args.beam_width if args.decoding_method == "beam" else "",
+        "max_test_samples": args.max_test_samples,
+        "fp16": args.fp16,
+        "seed": args.seed,
+    }
+    metadata_path = os.path.join(args.output_dir, "metadata.json")
+    with open(metadata_path, "w", encoding="utf-8") as output:
+        json.dump(metadata, output, indent=2, sort_keys=True)
+        output.write("\n")
 
 
 if __name__ == "__main__":

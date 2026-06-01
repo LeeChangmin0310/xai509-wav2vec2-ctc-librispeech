@@ -1,0 +1,6 @@
+experiment: freeze_feature_lr1e-4
+train_setting: frozen_feature_encoder
+learning_rate: 1.0e-4
+freeze_setting: feature_encoder
+layerwise_lr_decay: false
+decoding_method: greedy

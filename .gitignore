@@ -26,6 +26,7 @@ runs/
 # Large generated inference transcripts
 results/*/test_clean_result.txt
 results/*/test_other_result.txt
+results/*/metadata.json
 results/smoke/
 
 # OS / editor

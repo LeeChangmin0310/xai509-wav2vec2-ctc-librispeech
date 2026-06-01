@@ -62,6 +62,9 @@ training_args_for() {
     freeze6_lr1e-4)
       TRAINING_ARGS=(--learning_rate 1e-4 --freeze_n_layers 6)
       ;;
+    layerwise_lr_decay)
+      TRAINING_ARGS=(--learning_rate 5e-5 --layerwise_lr_decay --layerwise_lr_decay_rate 0.9 --head_learning_rate 1e-4)
+      ;;
     *)
       echo "Unknown experiment: $1" >&2
       return 1
@@ -99,6 +102,7 @@ experiments=(
   freeze_feature_lr1e-4
   freeze3_lr1e-4
   freeze6_lr1e-4
+  layerwise_lr_decay
 )
 
 echo "Using CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"

@@ -61,6 +61,37 @@ require_data() {
   bash "$SCRIPT_DIR/check_data.sh"
 }
 
+experiment_summary_args() {
+  local experiment="$1"
+  SUMMARY_ARGS=(--decoding_method greedy)
+  case "$experiment" in
+    baseline_lr1e-4)
+      SUMMARY_ARGS+=(--train_setting full_finetuning --learning_rate 1e-4 --freeze_setting none --layerwise_lr_decay false)
+      ;;
+    lr1e-5)
+      SUMMARY_ARGS+=(--train_setting full_finetuning --learning_rate 1e-5 --freeze_setting none --layerwise_lr_decay false)
+      ;;
+    lr5e-5)
+      SUMMARY_ARGS+=(--train_setting full_finetuning --learning_rate 5e-5 --freeze_setting none --layerwise_lr_decay false)
+      ;;
+    freeze_feature_lr1e-4)
+      SUMMARY_ARGS+=(--train_setting frozen_feature_encoder --learning_rate 1e-4 --freeze_setting feature_encoder --layerwise_lr_decay false)
+      ;;
+    freeze3_lr1e-4)
+      SUMMARY_ARGS+=(--train_setting frozen_encoder_layers --learning_rate 1e-4 --freeze_setting first_3_encoder_layers --layerwise_lr_decay false)
+      ;;
+    freeze6_lr1e-4)
+      SUMMARY_ARGS+=(--train_setting frozen_encoder_layers --learning_rate 1e-4 --freeze_setting first_6_encoder_layers --layerwise_lr_decay false)
+      ;;
+    layerwise_lr_decay)
+      SUMMARY_ARGS+=(--train_setting layerwise_lr_decay --learning_rate 5e-5 --freeze_setting feature_extractor --layerwise_lr_decay 0.9)
+      ;;
+    *)
+      SUMMARY_ARGS+=(--train_setting "$experiment")
+      ;;
+  esac
+}
+
 run_training() {
   local experiment="$1"
   shift

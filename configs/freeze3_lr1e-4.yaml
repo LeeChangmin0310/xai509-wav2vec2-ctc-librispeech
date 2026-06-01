@@ -1,0 +1,7 @@
+experiment: freeze3_lr1e-4
+train_setting: frozen_encoder_layers
+learning_rate: 1.0e-4
+freeze_setting: first_3_encoder_layers
+freeze_n_layers: 3
+layerwise_lr_decay: false
+decoding_method: greedy

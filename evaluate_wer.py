@@ -2,13 +2,25 @@
 
 import argparse
 import csv
+import json
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from jiwer import wer
 
 
-SUMMARY_FIELDS = ["experiment", "test_clean_wer", "test_other_wer"]
+SUMMARY_FIELDS = [
+    "experiment",
+    "train_setting",
+    "decoding_method",
+    "learning_rate",
+    "freeze_setting",
+    "layerwise_lr_decay",
+    "beam_width",
+    "test_clean_wer",
+    "test_other_wer",
+    "checkpoint_path",
+]
 
 
 def parse_args():
@@ -17,6 +29,14 @@ def parse_args():
     parser.add_argument("result_files", nargs="+", help="REF/HYP result files")
     parser.add_argument("--experiment_name", help="Experiment name for summary CSV")
     parser.add_argument("--summary_csv", help="CSV file to create or update")
+    parser.add_argument("--metadata_json", help="Optional inference metadata JSON")
+    parser.add_argument("--train_setting")
+    parser.add_argument("--decoding_method", choices=("greedy", "beam"))
+    parser.add_argument("--learning_rate")
+    parser.add_argument("--freeze_setting")
+    parser.add_argument("--layerwise_lr_decay")
+    parser.add_argument("--beam_width")
+    parser.add_argument("--checkpoint_path")
     return parser.parse_args()
 
 
@@ -49,7 +69,22 @@ def split_name(file_path: str) -> str:
     raise ValueError(f"Cannot infer test split from filename: {file_path}")
 
 
-def update_summary(summary_csv: str, experiment: str, scores: Dict[str, float]):
+def read_metadata(metadata_json: Optional[str], first_result_file: str) -> Dict:
+    """Read inference metadata when available, including older result folders."""
+    if metadata_json is None:
+        metadata_json = os.path.join(os.path.dirname(first_result_file), "metadata.json")
+    if not os.path.exists(metadata_json):
+        return {}
+    with open(metadata_json, "r", encoding="utf-8") as metadata_file:
+        return json.load(metadata_file)
+
+
+def update_summary(
+    summary_csv: str,
+    experiment: str,
+    scores: Dict[str, float],
+    metadata: Dict,
+):
     """Upsert one experiment row in the WER summary CSV."""
     rows = []
     if os.path.exists(summary_csv):
@@ -60,6 +95,9 @@ def update_summary(summary_csv: str, experiment: str, scores: Dict[str, float]):
     if row is None:
         row = {"experiment": experiment}
         rows.append(row)
+    for field in SUMMARY_FIELDS:
+        if field in metadata and metadata[field] is not None:
+            row[field] = str(metadata[field])
     for split, score in scores.items():
         row[f"{split}_wer"] = f"{score:.6f}"
 
@@ -86,7 +124,12 @@ def main():
     if args.summary_csv:
         if not args.experiment_name:
             raise ValueError("--experiment_name is required with --summary_csv")
-        update_summary(args.summary_csv, args.experiment_name, scores)
+        metadata = read_metadata(args.metadata_json, args.result_files[0])
+        for field in SUMMARY_FIELDS:
+            value = getattr(args, field, None)
+            if value is not None:
+                metadata[field] = value
+        update_summary(args.summary_csv, args.experiment_name, scores, metadata)
         print(f"Updated summary: {args.summary_csv}")
 
 

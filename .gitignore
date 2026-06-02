@@ -34,3 +34,17 @@ results/smoke/
 .venv/
 .vscode/
 .idea/
+
+# Non-final result summaries
+results/wer_summary.csv
+results/wer_summary.md
+results/wer_summary_asrinit.csv
+results/wer_summary_asrinit.md
+results/wer_summary_debug.csv
+results/figures/wer_barplot.png
+results/figures/wer_barplot_asrinit.png
+
+# Keep final ASR-init summaries tracked when explicitly added
+!results/wer_summary_asrinit_final.csv
+!results/wer_summary_asrinit_final.md
+!results/figures/wer_barplot_asrinit_final.png

@@ -87,6 +87,14 @@ else
 fi
 
 echo
+echo "== Final ASR-init WER summary =="
+if [[ -f "$PROJECT_ROOT/results/wer_summary_asrinit_final.csv" ]]; then
+  cat "$PROJECT_ROOT/results/wer_summary_asrinit_final.csv"
+else
+  echo "(not created yet)"
+fi
+
+echo
 echo "== GPU =="
 if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi || echo "nvidia-smi could not query the GPU."

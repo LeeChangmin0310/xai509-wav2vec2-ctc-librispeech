@@ -45,7 +45,9 @@ for result_file in \
   wer_summary.csv \
   wer_summary.md \
   wer_summary_asrinit.csv \
-  wer_summary_asrinit.md; do
+  wer_summary_asrinit.md \
+  wer_summary_asrinit_final.csv \
+  wer_summary_asrinit_final.md; do
   if [[ -f "$PROJECT_ROOT/results/$result_file" ]]; then
     cp "$PROJECT_ROOT/results/$result_file" "$SNAPSHOT_DIR/results/"
   fi

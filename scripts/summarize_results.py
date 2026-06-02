@@ -46,7 +46,8 @@ def parse_args():
         help="Plot output. Defaults under the input CSV's figures directory.",
     )
     args = parser.parse_args()
-    suffix = args.input_csv.stem.removeprefix("wer_summary")
+    stem = args.input_csv.stem
+    suffix = stem[len("wer_summary") :] if stem.startswith("wer_summary") else f"_{stem}"
     if args.output_md is None:
         args.output_md = args.input_csv.with_suffix(".md")
     if args.output_plot is None:
@@ -164,7 +165,8 @@ def write_plot(rows: List[Dict[str, str]], output_plot: Path):
     )
     axis.set_ylabel("WER")
     axis.set_title("Wav2Vec2 CTC experiment WER")
-    axis.set_xticks(positions, labels, rotation=30, ha="right")
+    axis.set_xticks(positions)
+    axis.set_xticklabels(labels, rotation=30, ha="right")
     axis.legend()
     figure.tight_layout()
     output_plot.parent.mkdir(parents=True, exist_ok=True)

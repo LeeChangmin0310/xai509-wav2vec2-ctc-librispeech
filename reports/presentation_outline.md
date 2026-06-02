@@ -24,29 +24,30 @@
 
 | Experiment | test-clean WER | test-other WER |
 | --- | ---: | ---: |
-| `asrinit_lr1e-6_fp32` | `[FILL IN]` | `[FILL IN]` |
-| `asrinit_lr3e-6_fp32` | `[FILL IN]` | `[FILL IN]` |
-| `asrinit_lr1e-5_fp32_fixed` | `[FILL IN]` | `[FILL IN]` |
+| `asrinit_lr1e-6_fp32` | `0.181223` | `0.241274` |
+| `asrinit_lr3e-6_fp32` | `0.164029` | `0.224137` |
+| `asrinit_lr1e-5_fp32_fixed` | **`0.140958`** | **`0.199759`** |
 
 ## 5. ASR-Initialized Freezing Sweep
 
 | Experiment | test-clean WER | test-other WER |
 | --- | ---: | ---: |
-| `asrinit_freeze_feature_lr3e-6_fp32` | `[FILL IN]` | `[FILL IN]` |
-| `asrinit_freeze3_lr3e-6_fp32` | `[FILL IN]` | `[FILL IN]` |
+| `asrinit_freeze_feature_lr3e-6_fp32` | `0.180044` | `0.240682` |
+| `asrinit_freeze3_lr3e-6_fp32` | `0.172208` | `0.232639` |
 
 ## 6. Test-Clean Versus Test-Other
 
-- Observed performance gap: `[FILL IN]`
-- Likely reason for the gap: `[FILL IN]`
+- Every configuration had higher WER on test-other.
+- Best greedy gap: `0.058801`; best beam gap: `0.057533`.
+- Interpretation: test-other remains the more challenging split.
 
 ## 7. Layer-Wise LR Decay
 
 | Experiment | test-clean WER | test-other WER |
 | --- | ---: | ---: |
-| `asrinit_layerwise_lr_decay_fixed` | `[FILL IN]` | `[FILL IN]` |
+| `asrinit_layerwise_lr_decay_fixed` | `0.184438` | `0.244312` |
 
-- Comparison against baseline: `[FILL IN]`
+- The tested layer-wise schedule did not improve WER.
 
 ## 8. Original Base-Model Failure Analysis
 
@@ -54,15 +55,20 @@
 - Train-mode SpecAugment produced NaN logits.
 - Setting `apply_spec_augment=False` restored finite forward loss.
 - ASR-init 20-sample smoke WER: clean `0.1049`, other `0.1301`.
+- Exclude the pre-fix `asrinit_lr1e-5_fp32` WER `1.0` debug row.
 
 ## 9. Optional Beam Decoding
 
-- Selected checkpoint: `[FILL IN]`
-- Beam width: `[FILL IN]`
-- Greedy versus beam WER comparison: `[FILL IN]`
+- Selected checkpoint: `asrinit_lr1e-5_fp32_fixed`
+- Beam width: `100`
+- Greedy: clean `0.140958`, other `0.199759`
+- Beam: clean `0.139227`, other `0.196760`
+- Beam search gave a small additional improvement.
 
 ## 10. Final Interpretation
 
-- Best experiment: `[FILL IN]`
-- Main result: `[FILL IN]`
-- Trade-offs and next steps: `[FILL IN]`
+- Best experiment: `asrinit_lr1e-5_fp32_fixed` with beam decoding.
+- LR `1e-5` helped most among the tested learning rates.
+- Freezing did not help as much; layer-wise decay did not improve WER.
+- Relative to the pretrained control, final beam WER fell by `25.19%` on
+  test-clean and `19.95%` on test-other.

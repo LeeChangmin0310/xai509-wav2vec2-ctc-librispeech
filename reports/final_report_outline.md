@@ -2,7 +2,10 @@
 
 ## Abstract
 
-`[Summarize the task, methods, and best WER result.]`
+Fine-tuning `facebook/wav2vec2-base-960h` with stable fp32 Hugging Face CTC loss
+reduced WER below the pretrained ASR control. The best checkpoint used learning
+rate `1e-5`; beam decoding reached `0.139227` test-clean WER and `0.196760`
+test-other WER.
 
 ## 1. Introduction
 
@@ -40,28 +43,30 @@
 
 | Experiment | test-clean WER | test-other WER |
 | --- | ---: | ---: |
-| `asrinit_lr1e-6_fp32` | `[FILL IN]` | `[FILL IN]` |
-| `asrinit_lr3e-6_fp32` | `[FILL IN]` | `[FILL IN]` |
-| `asrinit_lr1e-5_fp32_fixed` | `[FILL IN]` | `[FILL IN]` |
+| `asrinit_lr1e-6_fp32` | `0.181223` | `0.241274` |
+| `asrinit_lr3e-6_fp32` | `0.164029` | `0.224137` |
+| `asrinit_lr1e-5_fp32_fixed` | **`0.140958`** | **`0.199759`** |
 
 ### 4.3 ASR-Initialized Freezing Sweep
 
 | Experiment | test-clean WER | test-other WER |
 | --- | ---: | ---: |
-| `asrinit_freeze_feature_lr3e-6_fp32` | `[FILL IN]` | `[FILL IN]` |
-| `asrinit_freeze3_lr3e-6_fp32` | `[FILL IN]` | `[FILL IN]` |
+| `asrinit_freeze_feature_lr3e-6_fp32` | `0.180044` | `0.240682` |
+| `asrinit_freeze3_lr3e-6_fp32` | `0.172208` | `0.232639` |
 
 ### 4.4 Test-Clean Versus Test-Other
 
-`[Discuss the WER gap and any consistent trends.]`
+Test-other WER remained higher than test-clean WER for every configuration. The
+gap was `0.058801` for the best greedy model and `0.057533` after beam decoding.
 
 ### 4.5 ASR-Initialized Layer-Wise Learning-Rate Decay
 
 | Experiment | test-clean WER | test-other WER |
 | --- | ---: | ---: |
-| `asrinit_layerwise_lr_decay_fixed` | `[FILL IN]` | `[FILL IN]` |
+| `asrinit_layerwise_lr_decay_fixed` | `0.184438` | `0.244312` |
 
-`[Discuss whether smaller lower-layer learning rates improved robustness.]`
+Layer-wise LR decay did not improve over the pretrained control or the standard
+ASR-initialized fine-tuning runs.
 
 ### 4.6 Original Base-Model Failure Analysis
 
@@ -70,23 +75,28 @@
 - Diagnostic finding: train-mode SpecAugment produced NaN logits
 - Forward/loss probe after `apply_spec_augment=False`: finite loss `187.5894`
 - ASR-init 20-sample smoke WER: test-clean `0.1049`, test-other `0.1301`
+- Excluded debug row: pre-fix `asrinit_lr1e-5_fp32` with WER `1.0`
 
 ### 4.7 Optional Beam Decoding
 
-- Selected checkpoint: `[FILL IN]`
-- Beam width: `[FILL IN]`
-- Greedy WER: `[FILL IN]`
-- Beam WER: `[FILL IN]`
+- Selected checkpoint: `asrinit_lr1e-5_fp32_fixed`
+- Beam width: `100`
+- Greedy WER: test-clean `0.140958`, test-other `0.199759`
+- Beam WER: test-clean `0.139227`, test-other `0.196760`
 
 ## 5. Discussion
 
-- Effect of learning rate: `[FILL IN]`
-- Effect of freezing: `[FILL IN]`
-- Effect of layer-wise LR decay: `[FILL IN]`
-- Effect of optional beam decoding: `[FILL IN]`
-- Best overall configuration: `[FILL IN]`
-- Limitations: `[FILL IN]`
+- Effect of learning rate: among tested values, `1e-5` helped most.
+- Effect of freezing: freezing did not help as much as unfrozen `3e-6` training.
+- Effect of layer-wise LR decay: the tested decay setup did not improve WER.
+- Effect of optional beam decoding: beam search gave a small additional gain.
+- Best overall configuration: `asrinit_lr1e-5_fp32_fixed` with beam decoding.
+- Limitations: only a small set of learning rates, freezing choices, and one
+  layer-wise decay schedule were evaluated.
 
 ## 6. Conclusion
 
-`[State the final interpretation and the most important experimental result.]`
+Stable ASR-initialized fine-tuning improved both LibriSpeech test splits. The
+selected `1e-5` checkpoint reduced greedy WER relative to the pretrained control
+by `24.26%` on test-clean and `18.73%` on test-other; beam search improved both
+scores slightly further.

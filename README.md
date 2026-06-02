@@ -18,6 +18,8 @@ Final WebDataset `.tar` shards are read directly. Do not extract them.
   now disables SpecAugment by default.
 - ASR-init smoke training has finite train and evaluation loss. A 20-sample
   bounded check produced `0.1049` test-clean WER and `0.1301` test-other WER.
+- Final ASR-initialized experiments are complete. The best checkpoint is
+  `asrinit_lr1e-5_fp32_fixed`; beam decoding gives the lowest final WER.
 
 ## Environment Setup
 
@@ -185,12 +187,36 @@ The final queue order is:
 | `asrinit_freeze3_lr3e-6_fp32` | `3e-6` | First 3 encoder layers | fp32 |
 | `asrinit_layerwise_lr_decay_fixed` | encoder top: `3e-6`, head: `1e-5` | Feature extractor | Decay rate `0.9` |
 
-Results are written to `results/wer_summary_asrinit.csv`. Generate the separate
-Markdown summary and plot with:
+### Final Results
+
+The failed pre-fix `asrinit_lr1e-5_fp32` row with WER `1.0` is excluded from
+final comparisons. It was produced before SpecAugment was disabled.
+
+| Experiment | Decoding | test-clean WER | test-other WER |
+| --- | --- | ---: | ---: |
+| `asr_pretrained_960h_full` | Greedy | `0.186112` | `0.245802` |
+| `asrinit_lr1e-6_fp32` | Greedy | `0.181223` | `0.241274` |
+| `asrinit_lr3e-6_fp32` | Greedy | `0.164029` | `0.224137` |
+| `asrinit_lr1e-5_fp32_fixed` | Greedy | `0.140958` | `0.199759` |
+| `asrinit_freeze_feature_lr3e-6_fp32` | Greedy | `0.180044` | `0.240682` |
+| `asrinit_freeze3_lr3e-6_fp32` | Greedy | `0.172208` | `0.232639` |
+| `asrinit_layerwise_lr_decay_fixed` | Greedy | `0.184438` | `0.244312` |
+| `asrinit_lr1e-5_fp32_fixed_beam` | Beam | **`0.139227`** | **`0.196760`** |
+
+The best greedy checkpoint, `asrinit_lr1e-5_fp32_fixed`, improves over the
+pretrained ASR control by `0.045154` absolute WER on test-clean and `0.046043`
+on test-other. These are relative reductions of `24.26%` and `18.73%`.
+
+Beam decoding gives a small additional improvement over greedy decoding:
+`0.001731` absolute WER on test-clean and `0.002999` on test-other. Against the
+pretrained control, the final beam result reduces WER by `25.19%` and `19.95%`
+relative on the two splits.
+
+Generate the filtered final Markdown summary and plot with:
 
 ```bash
 python scripts/summarize_results.py \
-  --input_csv results/wer_summary_asrinit.csv
+  --input_csv results/wer_summary_asrinit_final.csv
 ```
 
 ## Original Base Queue
@@ -260,6 +286,13 @@ BEST_EXPERIMENT=layerwise_lr_decay BEAM_WIDTH=50 GPU_ID=0 \
 bash scripts/run_beam_decode.sh
 ```
 
+Decode the final selected ASR-init checkpoint with beam search:
+
+```bash
+BEST_EXPERIMENT=asrinit_lr1e-5_fp32_fixed BEAM_WIDTH=100 GPU_ID=0 \
+bash scripts/run_beam_decode.sh
+```
+
 Training supports:
 
 ```text
@@ -312,8 +345,11 @@ results/wer_summary.csv
 results/wer_summary.md
 results/wer_summary_asrinit.csv
 results/wer_summary_asrinit.md
+results/wer_summary_asrinit_final.csv
+results/wer_summary_asrinit_final.md
 results/figures/wer_barplot.png
 results/figures/wer_barplot_asrinit.png
+results/figures/wer_barplot_asrinit_final.png
 ```
 
 ## Monitoring
@@ -342,6 +378,8 @@ Generate a fixed-order Markdown table and a bar plot:
 python scripts/summarize_results.py
 python scripts/summarize_results.py \
   --input_csv results/wer_summary_asrinit.csv
+python scripts/summarize_results.py \
+  --input_csv results/wer_summary_asrinit_final.csv
 ```
 
 The CSV and Markdown summary support training settings, decoding method,
@@ -404,6 +442,8 @@ artifacts.
 - Blank predictions: run
   `python scripts/check_predictions_nonempty.py results/<experiment>/test_clean_result.txt`
   and inspect `reports/blank_collapse_debug.md`.
+- Failed/debug rows: exclude the old `asrinit_lr1e-5_fp32` WER `1.0` row from
+  final comparisons. Use `results/wer_summary_asrinit_final.csv`.
 
 ## Lightweight Checks
 

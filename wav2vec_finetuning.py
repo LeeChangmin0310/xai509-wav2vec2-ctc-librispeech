@@ -1,4 +1,4 @@
-"""Fine-tune Wav2Vec 2.0 with the provided custom CTC loss."""
+"""Fine-tune Wav2Vec 2.0 with Hugging Face or project CTC loss."""
 
 from __future__ import absolute_import, division, print_function, unicode_literals
 
@@ -72,6 +72,49 @@ def parse_args():
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
+        "--loss_impl",
+        choices=("hf", "custom"),
+        default="hf",
+        help="CTC loss implementation. Hugging Face model loss is the default.",
+    )
+    parser.add_argument(
+        "--debug_first_batch",
+        action="store_true",
+        help="Print shapes, label lengths, and decoded text for the first batch.",
+    )
+    parser.add_argument(
+        "--ctc_zero_infinity",
+        action="store_true",
+        help="Replace infinite Hugging Face CTC losses with zero.",
+    )
+    spec_augment_group = parser.add_mutually_exclusive_group()
+    spec_augment_group.add_argument(
+        "--disable_spec_augment",
+        dest="apply_spec_augment",
+        action="store_false",
+        help="Disable SpecAugment during fine-tuning. This is the stable default.",
+    )
+    spec_augment_group.add_argument(
+        "--enable_spec_augment",
+        dest="apply_spec_augment",
+        action="store_true",
+        help="Enable SpecAugment during fine-tuning.",
+    )
+    attention_mask_group = parser.add_mutually_exclusive_group()
+    attention_mask_group.add_argument(
+        "--use_attention_mask_for_loss",
+        dest="use_attention_mask_for_loss",
+        action="store_true",
+        help="Always pass the collator attention mask during the loss forward pass.",
+    )
+    attention_mask_group.add_argument(
+        "--no_attention_mask_for_loss",
+        dest="use_attention_mask_for_loss",
+        action="store_false",
+        help="Never pass an attention mask during the loss forward pass.",
+    )
+    parser.set_defaults(apply_spec_augment=False, use_attention_mask_for_loss=None)
+    parser.add_argument(
         "--dry_run",
         action="store_true",
         help="Validate shard paths and print the plan without loading a model.",
@@ -123,13 +166,57 @@ class DataCollatorCTCWithPadding:
 
 
 class MyCtcTrainer(Trainer):
-    """Trainer that uses the project custom CTC loss."""
+    """Trainer with Hugging Face CTC loss and an optional custom path."""
 
-    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        labels = inputs.pop("labels")
+    def __init__(
+        self,
+        *args,
+        loss_impl="hf",
+        debug_first_batch=False,
+        debug_processor=None,
+        use_attention_mask_for_loss=True,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.loss_impl = loss_impl
+        self.debug_first_batch = debug_first_batch
+        self.debug_processor = debug_processor
+        self.use_attention_mask_for_loss = use_attention_mask_for_loss
+        self._logged_first_batch = False
+
+    def _log_first_batch(self, inputs, labels, outputs):
+        if not self.debug_first_batch or self._logged_first_batch:
+            return
+
         attention_mask = inputs.get("attention_mask")
-        outputs = model(**inputs)
+        label_lengths = labels.ne(-100).sum(dim=-1).detach().cpu().tolist()
+        print("Debug first batch:")
+        print(f"  input_values shape: {tuple(inputs['input_values'].shape)}")
+        if attention_mask is None:
+            print("  attention_mask shape: None")
+        else:
+            print(f"  attention_mask shape: {tuple(attention_mask.shape)}")
+        print(
+            "  attention_mask passed during loss forward: "
+            f"{self.use_attention_mask_for_loss}"
+        )
+        print(f"  labels shape: {tuple(labels.shape)}")
+        print(f"  valid label tokens per sample: {label_lengths}")
 
+        if self.debug_processor is not None and labels.shape[0] > 0:
+            first_labels = labels[0][labels[0].ne(-100)].detach().cpu().tolist()
+            first_prediction = outputs.logits[0].argmax(dim=-1).detach().cpu().tolist()
+            print(
+                "  first decoded label text: "
+                f"{self.debug_processor.decode(first_labels, group_tokens=False)!r}"
+            )
+            print(
+                "  first prediction text before training: "
+                f"{self.debug_processor.decode(first_prediction)!r}"
+            )
+        self._logged_first_batch = True
+
+    def _compute_custom_loss(self, model, inputs, labels, outputs, attention_mask):
         if attention_mask is None:
             input_lengths = torch.full(
                 (inputs["input_values"].shape[0],),
@@ -144,14 +231,73 @@ class MyCtcTrainer(Trainer):
         logits_lengths = actual_model._get_feat_extract_output_lengths(input_lengths)
         logits = outputs.logits.float()
         target_lengths = labels.ge(0).sum(dim=-1).to(torch.long)
-        loss = ctc_loss.CtcLoss.apply(
+        return ctc_loss.CtcLoss.apply(
             labels,
             target_lengths,
             logits.log_softmax(dim=-1),
             logits_lengths,
         ).mean()
 
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        labels = inputs["labels"]
+        attention_mask = (
+            inputs.get("attention_mask") if self.use_attention_mask_for_loss else None
+        )
+
+        if self.loss_impl == "hf":
+            outputs = model(
+                input_values=inputs["input_values"],
+                attention_mask=attention_mask,
+                labels=labels,
+            )
+            loss = outputs.loss
+        else:
+            outputs = model(
+                input_values=inputs["input_values"],
+                attention_mask=attention_mask,
+            )
+            loss = self._compute_custom_loss(model, inputs, labels, outputs, attention_mask)
+
+        self._log_first_batch(inputs, labels, outputs)
+        if loss is None or not torch.isfinite(loss).all().item():
+            loss_value = None if loss is None else loss.detach().cpu().tolist()
+            raise RuntimeError(
+                f"Non-finite {self.loss_impl} CTC loss detected: {loss_value}. "
+                "Check audio lengths, label lengths, and the selected loss implementation."
+            )
+
         return (loss, outputs) if return_outputs else loss
+
+
+def resolve_use_attention_mask_for_loss(processor, model, requested: Optional[bool]):
+    """Resolve whether training forwards the collator attention mask to the model."""
+    if requested is not None:
+        print(f"Attention mask for loss forward explicitly set to {requested}")
+        return requested
+
+    return_attention_mask = getattr(
+        processor.feature_extractor, "return_attention_mask", None
+    )
+    feat_extract_norm = getattr(model.config, "feat_extract_norm", None)
+    use_attention_mask = not (
+        return_attention_mask is False or feat_extract_norm == "group"
+    )
+    print(
+        "Attention mask for loss forward auto-selected: "
+        f"{use_attention_mask} "
+        f"(return_attention_mask={return_attention_mask}, "
+        f"feat_extract_norm={feat_extract_norm})"
+    )
+    return use_attention_mask
+
+
+def configure_spec_augment(model, apply_spec_augment: bool):
+    """Set SpecAugment consistently on the CTC wrapper and Wav2Vec2 module."""
+    model.config.apply_spec_augment = apply_spec_augment
+    if hasattr(model, "wav2vec2") and hasattr(model.wav2vec2, "config"):
+        wav2vec2_config = model.wav2vec2.config
+        if hasattr(wav2vec2_config, "apply_spec_augment"):
+            wav2vec2_config.apply_spec_augment = apply_spec_augment
 
 
 def freeze_model_layers(model, freeze_feature_encoder: bool, freeze_n_layers: int):
@@ -296,7 +442,11 @@ def main():
             f"model={args.model_name_or_path}, output_dir={args.output_dir}, "
             f"max_train_steps={args.max_train_steps}, "
             f"max_eval_samples={args.max_eval_samples}, "
-            f"layerwise_lr_decay={args.layerwise_lr_decay}"
+            f"layerwise_lr_decay={args.layerwise_lr_decay}, "
+            f"loss_impl={args.loss_impl}, "
+            f"ctc_zero_infinity={args.ctc_zero_infinity}, "
+            f"apply_spec_augment={args.apply_spec_augment}, "
+            f"use_attention_mask_for_loss={args.use_attention_mask_for_loss}"
         )
         return
 
@@ -315,6 +465,17 @@ def main():
         ctc_loss_reduction="mean",
         pad_token_id=processor.tokenizer.pad_token_id,
     )
+    if args.ctc_zero_infinity:
+        model.config.ctc_zero_infinity = True
+    configure_spec_augment(model, args.apply_spec_augment)
+    use_attention_mask_for_loss = resolve_use_attention_mask_for_loss(
+        processor, model, args.use_attention_mask_for_loss
+    )
+    print(f"model.config.apply_spec_augment={model.config.apply_spec_augment}")
+    print(f"model.training={model.training}")
+    print(f"loss_impl={args.loss_impl}")
+    print(f"use_attention_mask_for_loss={use_attention_mask_for_loss}")
+    print(f"ctc_zero_infinity={getattr(model.config, 'ctc_zero_infinity', False)}")
     freeze_model_layers(model, args.freeze_feature_encoder, args.freeze_n_layers)
     optimizer: Optional[torch.optim.Optimizer] = None
     if args.layerwise_lr_decay:
@@ -354,6 +515,10 @@ def main():
         data_collator=DataCollatorCTCWithPadding(processor=processor),
         compute_metrics=build_compute_metrics(processor),
         optimizers=(optimizer, None) if optimizer is not None else (None, None),
+        loss_impl=args.loss_impl,
+        debug_first_batch=args.debug_first_batch,
+        debug_processor=processor,
+        use_attention_mask_for_loss=use_attention_mask_for_loss,
     )
     trainer.train()
 

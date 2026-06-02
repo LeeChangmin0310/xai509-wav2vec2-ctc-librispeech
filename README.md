@@ -1,8 +1,9 @@
 # XAI 509 Wav2Vec2 CTC Project
 
-This project fine-tunes Wav2Vec 2.0 with the provided custom CTC loss, runs
-inference on LibriSpeech `test-clean` and `test-other`, and records WER for
-seven training experiments plus optional beam decoding.
+This project fine-tunes Wav2Vec 2.0 with CTC loss, runs inference on LibriSpeech
+`test-clean` and `test-other`, and records WER for seven training experiments
+plus optional beam decoding. Hugging Face model loss is the default path under
+diagnosis; the provided custom CTC implementation remains available explicitly.
 
 Final WebDataset `.tar` shards are read directly. Do not extract them.
 
@@ -11,8 +12,11 @@ Final WebDataset `.tar` shards are read directly. Do not extract them.
 - The project skeleton is implemented.
 - Data shards are present under `data/`.
 - Python and shell syntax checks pass.
-- Full baseline training has not been started.
 - Smoke and unattended single-GPU queue scripts are available.
+- The pretrained `facebook/wav2vec2-base-960h` inference control works.
+- Train-mode SpecAugment was identified as the source of NaN logits. Fine-tuning
+  now disables SpecAugment by default; rerun the bounded ASR-init smoke test
+  before resuming full experiments.
 
 ## Environment Setup
 
@@ -104,6 +108,15 @@ SMOKE_TEST_SAMPLES=8 \
 bash scripts/run_smoke_train.sh
 ```
 
+Use first-batch diagnostics or override the model and output directory:
+
+```bash
+GPU_ID=0 DEBUG_FIRST_BATCH=1 \
+MODEL_NAME_OR_PATH=facebook/wav2vec2-base-960h \
+OUTPUT_DIR=outputs/smoke_asrinit \
+bash scripts/run_smoke_train.sh
+```
+
 Smoke artifacts use:
 
 ```text
@@ -111,6 +124,36 @@ outputs/smoke/
 results/smoke/
 logs/smoke_train.log
 logs/smoke_inference_eval.log
+```
+
+Probe CTC inputs and loss variants before retrying training:
+
+```bash
+bash scripts/run_probe_ctc_loss.sh
+```
+
+For the dedicated two-step fp32 ASR-initialized diagnostic, the script disables
+SpecAugment, enables `ctc_zero_infinity`, and omits the loss-forward attention
+mask:
+
+```bash
+GPU_ID=0 DEBUG_FIRST_BATCH=1 bash scripts/run_smoke_asrinit_train.sh
+CUDA_VISIBLE_DEVICES=0 python wav2vec_inference.py \
+  --test_clean_shards data/test-clean \
+  --test_other_shards data/test-other \
+  --model_name_or_path outputs/smoke_asrinit/final_model \
+  --output_dir results/smoke_asrinit \
+  --per_device_eval_batch_size 1 \
+  --max_test_samples 4
+python evaluate_wer.py \
+  --experiment_name smoke_asrinit \
+  --summary_csv results/smoke_asrinit/wer_summary.csv \
+  results/smoke_asrinit/test_clean_result.txt \
+  results/smoke_asrinit/test_other_result.txt
+python scripts/check_predictions_nonempty.py \
+  results/smoke_asrinit/test_clean_result.txt
+python scripts/check_predictions_nonempty.py \
+  results/smoke_asrinit/test_other_result.txt
 ```
 
 ## Single-GPU RTX 3090 Queue
@@ -197,6 +240,13 @@ Training supports:
 --layerwise_lr_decay_rate
 --head_learning_rate
 --feature_extractor_learning_rate
+--loss_impl hf|custom
+--debug_first_batch
+--ctc_zero_infinity
+--disable_spec_augment
+--enable_spec_augment
+--use_attention_mask_for_loss
+--no_attention_mask_for_loss
 --fp16
 --seed
 --dry_run
@@ -282,12 +332,33 @@ artifacts.
   provided beam decoding script.
 - Queue failures: inspect `logs/failed_experiments.txt` and the corresponding
   `logs/<experiment_name>.log`.
+- Loss-path diagnosis: pretrained `facebook/wav2vec2-base-960h` inference
+  controls produced `0.186112` test-clean WER and `0.245802` test-other WER.
+  Earlier base fine-tuning collapsed to blank predictions, and an ASR-init run
+  showed training loss `0`, `grad_norm=nan`, `eval_loss=nan`, and `eval_wer=1`.
+  A bounded ASR-init retry with Hugging Face loss then produced `nan` on its
+  first batch. The probe showed that train-mode SpecAugment caused NaN logits.
+- SpecAugment NaNs: fine-tuning disables SpecAugment by default for stable
+  low-resource runs. Pass `--disable_spec_augment` explicitly in reproducible
+  scripts. Use `--enable_spec_augment` only for intentional experiments.
+- Verify the diagnosis: run `bash scripts/run_probe_ctc_loss.sh`. It compares
+  eval mode, train mode with `apply_spec_augment=True`, and train mode with
+  `apply_spec_augment=False`.
+- Attention-mask safeguards: group-normalized Wav2Vec2 models omit the
+  loss-forward attention mask by default unless `--use_attention_mask_for_loss`
+  is explicitly set. The ASR-init smoke script also enables
+  `--ctc_zero_infinity`.
+- Evaluation control: use pretrained `facebook/wav2vec2-base-960h` inference to
+  verify the data reader and WER path independently of fine-tuning.
+- Blank predictions: run
+  `python scripts/check_predictions_nonempty.py results/<experiment>/test_clean_result.txt`
+  and inspect `reports/blank_collapse_debug.md`.
 
 ## Lightweight Checks
 
 Run syntax checks without starting training:
 
 ```bash
-python -m py_compile *.py
+python -m py_compile *.py scripts/*.py
 bash -n scripts/*.sh
 ```

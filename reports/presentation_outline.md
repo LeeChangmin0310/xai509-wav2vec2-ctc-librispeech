@@ -2,7 +2,7 @@
 
 ## 1. Project Goal
 
-- Fine-tune Wav2Vec 2.0 with the provided custom CTC loss.
+- Fine-tune Wav2Vec 2.0 with the Hugging Face CTC loss path.
 - Compare learning-rate, freezing, and layer-wise LR decay strategies.
 - Evaluate both `test-clean` and `test-other`.
 

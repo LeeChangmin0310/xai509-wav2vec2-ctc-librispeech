@@ -88,7 +88,11 @@ run_experiment() {
   local experiment="$1"
   training_args_for "$experiment" || return $?
   run_stage "$experiment" training \
-    run_training "$experiment" "${TRAINING_ARGS[@]}" || return $?
+    run_training "$experiment" \
+      --disable_spec_augment \
+      --loss_impl hf \
+      --ctc_zero_infinity \
+      "${TRAINING_ARGS[@]}" || return $?
   run_stage "$experiment" inference \
     run_inference_logged "$experiment" || return $?
   run_stage "$experiment" wer_evaluation \

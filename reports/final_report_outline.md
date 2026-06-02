@@ -14,7 +14,7 @@
 
 - WebDataset shard loading without extraction
 - Wav2Vec2 CTC fine-tuning pipeline
-- Custom CTC loss integration
+- Hugging Face CTC loss integration with an optional custom diagnostic path
 - Batched inference and WER evaluation
 - Optional layer-wise LR decay optimizer groups
 - Optional CTC beam decoding without a required language model

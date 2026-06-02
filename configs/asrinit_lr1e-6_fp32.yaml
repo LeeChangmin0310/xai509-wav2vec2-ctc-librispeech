@@ -1,0 +1,12 @@
+experiment: asrinit_lr1e-6_fp32
+model_name_or_path: facebook/wav2vec2-base-960h
+train_setting: asr_initialized_finetuning
+learning_rate: 1.0e-6
+fp16_training: false
+loss_impl: hf
+disable_spec_augment: true
+ctc_zero_infinity: true
+no_attention_mask_for_loss: true
+freeze_setting: none
+layerwise_lr_decay: false
+decoding_method: greedy

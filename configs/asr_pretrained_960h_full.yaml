@@ -1,0 +1,7 @@
+experiment: asr_pretrained_960h_full
+model_name_or_path: facebook/wav2vec2-base-960h
+train_setting: pretrained_asr_control
+inference_only: true
+freeze_setting: none
+layerwise_lr_decay: false
+decoding_method: greedy

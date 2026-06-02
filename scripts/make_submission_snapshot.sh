@@ -41,7 +41,11 @@ copy_tree_without_weights "$PROJECT_ROOT/configs" "$SNAPSHOT_DIR/configs"
 copy_tree_without_weights "$PROJECT_ROOT/reports" "$SNAPSHOT_DIR/reports"
 
 mkdir -p "$SNAPSHOT_DIR/results"
-for result_file in wer_summary.csv wer_summary.md; do
+for result_file in \
+  wer_summary.csv \
+  wer_summary.md \
+  wer_summary_asrinit.csv \
+  wer_summary_asrinit.md; do
   if [[ -f "$PROJECT_ROOT/results/$result_file" ]]; then
     cp "$PROJECT_ROOT/results/$result_file" "$SNAPSHOT_DIR/results/"
   fi

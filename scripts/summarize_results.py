@@ -16,6 +16,13 @@ EXPERIMENT_ORDER = [
     "freeze3_lr1e-4",
     "freeze6_lr1e-4",
     "layerwise_lr_decay",
+    "asr_pretrained_960h_full",
+    "asrinit_lr1e-6_fp32",
+    "asrinit_lr3e-6_fp32",
+    "asrinit_lr1e-5_fp32_fixed",
+    "asrinit_freeze_feature_lr3e-6_fp32",
+    "asrinit_freeze3_lr3e-6_fp32",
+    "asrinit_layerwise_lr_decay_fixed",
 ]
 
 
@@ -31,14 +38,22 @@ def parse_args():
     parser.add_argument(
         "--output_md",
         type=Path,
-        default=project_root / "results" / "wer_summary.md",
+        help="Markdown output. Defaults next to --input_csv.",
     )
     parser.add_argument(
         "--output_plot",
         type=Path,
-        default=project_root / "results" / "figures" / "wer_barplot.png",
+        help="Plot output. Defaults under the input CSV's figures directory.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    suffix = args.input_csv.stem.removeprefix("wer_summary")
+    if args.output_md is None:
+        args.output_md = args.input_csv.with_suffix(".md")
+    if args.output_plot is None:
+        args.output_plot = (
+            args.input_csv.parent / "figures" / f"wer_barplot{suffix}.png"
+        )
+    return args
 
 
 def parse_score(value: str) -> Optional[float]:

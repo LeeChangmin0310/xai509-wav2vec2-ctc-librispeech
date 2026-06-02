@@ -1,9 +1,9 @@
 # XAI 509 Wav2Vec2 CTC Project
 
 This project fine-tunes Wav2Vec 2.0 with CTC loss, runs inference on LibriSpeech
-`test-clean` and `test-other`, and records WER for seven training experiments
-plus optional beam decoding. Hugging Face model loss is the default path under
-diagnosis; the provided custom CTC implementation remains available explicitly.
+`test-clean` and `test-other`, and records WER for ASR-initialized final
+experiments plus diagnostic base-model runs. Hugging Face model loss is the
+default; the provided custom CTC implementation remains available explicitly.
 
 Final WebDataset `.tar` shards are read directly. Do not extract them.
 
@@ -15,8 +15,9 @@ Final WebDataset `.tar` shards are read directly. Do not extract them.
 - Smoke and unattended single-GPU queue scripts are available.
 - The pretrained `facebook/wav2vec2-base-960h` inference control works.
 - Train-mode SpecAugment was identified as the source of NaN logits. Fine-tuning
-  now disables SpecAugment by default; rerun the bounded ASR-init smoke test
-  before resuming full experiments.
+  now disables SpecAugment by default.
+- ASR-init smoke training has finite train and evaluation loss. A 20-sample
+  bounded check produced `0.1049` test-clean WER and `0.1301` test-other WER.
 
 ## Environment Setup
 
@@ -156,9 +157,49 @@ python scripts/check_predictions_nonempty.py \
   results/smoke_asrinit/test_other_result.txt
 ```
 
-## Single-GPU RTX 3090 Queue
+## ASR-Initialized Final Experiments
 
-After smoke tests pass, launch all seven experiments sequentially on one GPU:
+The final result path starts from `facebook/wav2vec2-base-960h`, trains in fp32,
+disables SpecAugment, uses Hugging Face CTC loss, and enables
+`ctc_zero_infinity`. Inference uses fp16 by default when CUDA is available.
+
+Launch the complete resumable queue on one GPU:
+
+```bash
+GPU_ID=0 CONTINUE_ON_ERROR=1 bash scripts/run_asrinit_queue_3090.sh
+```
+
+Set `INFERENCE_FP16=0` to disable fp16 inference. Set `FORCE=1` to rerun
+completed checkpoints and transcripts. Failures are appended to
+`logs/failed_asrinit_experiments.txt`.
+
+The final queue order is:
+
+| Experiment | Learning rate | Freezing | Notes |
+| --- | ---: | --- | --- |
+| `asr_pretrained_960h_full` | - | None | Inference-only pretrained control |
+| `asrinit_lr1e-6_fp32` | `1e-6` | None | Full fp32 fine-tuning |
+| `asrinit_lr3e-6_fp32` | `3e-6` | None | Full fp32 fine-tuning |
+| `asrinit_lr1e-5_fp32_fixed` | `1e-5` | None | New fixed output path |
+| `asrinit_freeze_feature_lr3e-6_fp32` | `3e-6` | Feature encoder | fp32 |
+| `asrinit_freeze3_lr3e-6_fp32` | `3e-6` | First 3 encoder layers | fp32 |
+| `asrinit_layerwise_lr_decay_fixed` | encoder top: `3e-6`, head: `1e-5` | Feature extractor | Decay rate `0.9` |
+
+Results are written to `results/wer_summary_asrinit.csv`. Generate the separate
+Markdown summary and plot with:
+
+```bash
+python scripts/summarize_results.py \
+  --input_csv results/wer_summary_asrinit.csv
+```
+
+## Original Base Queue
+
+The original `facebook/wav2vec2-base` experiments are retained as
+failure-analysis history. They collapsed to blank predictions and are not the
+recommended final-results path.
+
+To reproduce that diagnostic queue:
 
 ```bash
 GPU_ID=0 FP16=1 CONTINUE_ON_ERROR=1 bash scripts/run_queue_3090.sh
@@ -175,7 +216,7 @@ rerun completed work:
 GPU_ID=0 FP16=1 FORCE=1 CONTINUE_ON_ERROR=1 bash scripts/run_queue_3090.sh
 ```
 
-The required queue order is:
+The original queue order is:
 
 | Experiment | Learning rate | Freezing |
 | --- | ---: | --- |
@@ -269,7 +310,10 @@ results/<experiment_name>/
 results/<experiment_name>/metadata.json
 results/wer_summary.csv
 results/wer_summary.md
+results/wer_summary_asrinit.csv
+results/wer_summary_asrinit.md
 results/figures/wer_barplot.png
+results/figures/wer_barplot_asrinit.png
 ```
 
 ## Monitoring
@@ -286,6 +330,8 @@ Monitor the GPU and a running experiment:
 watch -n 2 nvidia-smi
 tail -f logs/baseline_lr1e-4.log
 cat logs/failed_experiments.txt
+tail -f logs/asrinit_lr3e-6_fp32.log
+cat logs/failed_asrinit_experiments.txt
 ```
 
 ## Result Summary
@@ -294,13 +340,15 @@ Generate a fixed-order Markdown table and a bar plot:
 
 ```bash
 python scripts/summarize_results.py
+python scripts/summarize_results.py \
+  --input_csv results/wer_summary_asrinit.csv
 ```
 
 The CSV and Markdown summary support training settings, decoding method,
 learning rate, freezing, layer-wise decay, beam width, WER values, and
 checkpoint paths. The best `test-clean` and `test-other` WER values are bolded
-in `results/wer_summary.md`. The plot is skipped gracefully if matplotlib is
-not installed.
+in each generated Markdown table. The plot is skipped gracefully if matplotlib
+is not installed.
 
 ## Submission Snapshot
 
@@ -326,6 +374,9 @@ artifacts.
   `GPU_ID=1 bash scripts/run_smoke_train.sh`.
 - Interrupted queue: rerun `scripts/run_queue_3090.sh`. Existing checkpoints
   and completed inference files are skipped unless `FORCE=1`.
+- Interrupted ASR-init queue: rerun `scripts/run_asrinit_queue_3090.sh`.
+  Existing checkpoints, transcripts, and summary rows are reused unless
+  `FORCE=1`.
 - Model download errors: make sure the Hugging Face cache is writable and the
   initial `facebook/wav2vec2-base` download can reach the network.
 - Beam dependency errors: install `pyctcdecode`. KenLM is not required for the

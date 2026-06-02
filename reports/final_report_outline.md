@@ -15,6 +15,7 @@
 - WebDataset shard loading without extraction
 - Wav2Vec2 CTC fine-tuning pipeline
 - Hugging Face CTC loss integration with an optional custom diagnostic path
+- Stable fp32 ASR-initialized training with SpecAugment disabled
 - Batched inference and WER evaluation
 - Optional layer-wise LR decay optimizer groups
 - Optional CTC beam decoding without a required language model
@@ -22,46 +23,55 @@
 ## 3. Experimental Setup
 
 - Hardware: single RTX 3090
-- Base model: `facebook/wav2vec2-base`
+- Final initialization: `facebook/wav2vec2-base-960h`
 - Training and evaluation splits
-- Shared hyperparameters
+- Shared hyperparameters: fp32 training, Hugging Face CTC loss,
+  `ctc_zero_infinity`, and SpecAugment disabled
 
 ## 4. Results
 
-### 4.1 Baseline WER
+### 4.1 Pretrained ASR Control
 
 | Experiment | test-clean WER | test-other WER |
 | --- | ---: | ---: |
-| `baseline_lr1e-4` | `[FILL IN]` | `[FILL IN]` |
+| `asr_pretrained_960h_full` | `0.186112` | `0.245802` |
 
-### 4.2 Learning-Rate Sweep
-
-| Experiment | test-clean WER | test-other WER |
-| --- | ---: | ---: |
-| `lr1e-5` | `[FILL IN]` | `[FILL IN]` |
-| `lr5e-5` | `[FILL IN]` | `[FILL IN]` |
-
-### 4.3 Freezing Sweep
+### 4.2 ASR-Initialized Learning-Rate Sweep
 
 | Experiment | test-clean WER | test-other WER |
 | --- | ---: | ---: |
-| `freeze_feature_lr1e-4` | `[FILL IN]` | `[FILL IN]` |
-| `freeze3_lr1e-4` | `[FILL IN]` | `[FILL IN]` |
-| `freeze6_lr1e-4` | `[FILL IN]` | `[FILL IN]` |
+| `asrinit_lr1e-6_fp32` | `[FILL IN]` | `[FILL IN]` |
+| `asrinit_lr3e-6_fp32` | `[FILL IN]` | `[FILL IN]` |
+| `asrinit_lr1e-5_fp32_fixed` | `[FILL IN]` | `[FILL IN]` |
+
+### 4.3 ASR-Initialized Freezing Sweep
+
+| Experiment | test-clean WER | test-other WER |
+| --- | ---: | ---: |
+| `asrinit_freeze_feature_lr3e-6_fp32` | `[FILL IN]` | `[FILL IN]` |
+| `asrinit_freeze3_lr3e-6_fp32` | `[FILL IN]` | `[FILL IN]` |
 
 ### 4.4 Test-Clean Versus Test-Other
 
 `[Discuss the WER gap and any consistent trends.]`
 
-### 4.5 Layer-Wise Learning-Rate Decay
+### 4.5 ASR-Initialized Layer-Wise Learning-Rate Decay
 
 | Experiment | test-clean WER | test-other WER |
 | --- | ---: | ---: |
-| `layerwise_lr_decay` | `[FILL IN]` | `[FILL IN]` |
+| `asrinit_layerwise_lr_decay_fixed` | `[FILL IN]` | `[FILL IN]` |
 
 `[Discuss whether smaller lower-layer learning rates improved robustness.]`
 
-### 4.6 Optional Beam Decoding
+### 4.6 Original Base-Model Failure Analysis
+
+- Original initialization: `facebook/wav2vec2-base`
+- Observed failure: blank prediction collapse
+- Diagnostic finding: train-mode SpecAugment produced NaN logits
+- Forward/loss probe after `apply_spec_augment=False`: finite loss `187.5894`
+- ASR-init 20-sample smoke WER: test-clean `0.1049`, test-other `0.1301`
+
+### 4.7 Optional Beam Decoding
 
 - Selected checkpoint: `[FILL IN]`
 - Beam width: `[FILL IN]`

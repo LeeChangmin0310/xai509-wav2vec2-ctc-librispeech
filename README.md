@@ -23,8 +23,7 @@ Final WebDataset `.tar` shards are read directly. Do not extract them.
 
 ## Environment Setup
 
-The target GPU environment uses PyTorch `2.5.1+cu121` and torchaudio
-`2.5.1+cu121`.
+The target GPU environment uses PyTorch `2.6.0` and torchaudio `2.6.0`.
 
 Using conda:
 

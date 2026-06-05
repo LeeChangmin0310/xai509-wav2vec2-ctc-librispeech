@@ -26,6 +26,10 @@ def parse_args():
     """Parse fine-tuning arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train_shards", default="data/train")
+    parser.add_argument(
+        "--eval_shards",
+        help="Optional validation shards for Trainer evaluation/checkpoint selection.",
+    )
     parser.add_argument("--test_clean_shards", default="data/test-clean")
     parser.add_argument("--test_other_shards", default="data/test-other")
     parser.add_argument("--model_name_or_path", default="facebook/wav2vec2-base")
@@ -429,11 +433,11 @@ def main():
     set_seed(args.seed)
 
     if args.dry_run:
-        shard_sets = {
-            "train": args.train_shards,
-            "test-clean": args.test_clean_shards,
-            "test-other": args.test_other_shards,
-        }
+        shard_sets = {"train": args.train_shards}
+        if args.eval_shards is not None:
+            shard_sets["eval"] = args.eval_shards
+        shard_sets["test-clean"] = args.test_clean_shards
+        shard_sets["test-other"] = args.test_other_shards
         for split, shards in shard_sets.items():
             paths = sample_util.find_shards(shards)
             print(f"{split}: {len(paths)} shard(s)")
@@ -442,6 +446,7 @@ def main():
             f"model={args.model_name_or_path}, output_dir={args.output_dir}, "
             f"max_train_steps={args.max_train_steps}, "
             f"max_eval_samples={args.max_eval_samples}, "
+            f"eval_shards={args.eval_shards or args.test_clean_shards}, "
             f"layerwise_lr_decay={args.layerwise_lr_decay}, "
             f"loss_impl={args.loss_impl}, "
             f"ctc_zero_infinity={args.ctc_zero_infinity}, "
@@ -454,8 +459,9 @@ def main():
     train_dataset = sample_util.make_dataset(
         args.train_shards, processor, shuffle=True
     )
-    test_clean_dataset = sample_util.make_dataset(
-        args.test_clean_shards,
+    eval_shards = args.eval_shards or args.test_clean_shards
+    eval_dataset = sample_util.make_dataset(
+        eval_shards,
         processor,
         max_samples=args.max_eval_samples,
     )
@@ -474,6 +480,7 @@ def main():
     print(f"model.config.apply_spec_augment={model.config.apply_spec_augment}")
     print(f"model.training={model.training}")
     print(f"loss_impl={args.loss_impl}")
+    print(f"trainer_eval_shards={eval_shards}")
     print(f"use_attention_mask_for_loss={use_attention_mask_for_loss}")
     print(f"ctc_zero_infinity={getattr(model.config, 'ctc_zero_infinity', False)}")
     freeze_model_layers(model, args.freeze_feature_encoder, args.freeze_n_layers)
@@ -510,7 +517,7 @@ def main():
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=test_clean_dataset,
+        eval_dataset=eval_dataset,
         processing_class=processor,
         data_collator=DataCollatorCTCWithPadding(processor=processor),
         compute_metrics=build_compute_metrics(processor),

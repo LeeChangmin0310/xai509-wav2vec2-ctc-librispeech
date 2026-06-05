@@ -40,19 +40,33 @@ class SizedWebDataset(torch.utils.data.IterableDataset):
         return self.length
 
 
+def _expand_shard_spec(shard_spec: str) -> List[str]:
+    """Expand one shard spec as a directory, tar file, or glob pattern."""
+    shard_spec = shard_spec.strip()
+    if not shard_spec:
+        return []
+    if os.path.isdir(shard_spec):
+        return glob.glob(os.path.join(shard_spec, "*.tar"))
+    if os.path.isfile(shard_spec):
+        return [shard_spec]
+    return glob.glob(shard_spec)
+
+
 def find_shards(shards: ShardInput) -> List[str]:
-    """Resolve a shard directory, glob, tar path, or iterable of tar paths."""
+    """Resolve shard directories, globs, tar paths, comma lists, or iterables."""
     if isinstance(shards, str):
-        if os.path.isdir(shards):
-            shard_paths = glob.glob(os.path.join(shards, "*.tar"))
-        elif os.path.isfile(shards):
-            shard_paths = [shards]
-        else:
-            shard_paths = glob.glob(shards)
+        shard_paths = list(
+            itertools.chain.from_iterable(
+                _expand_shard_spec(shard_spec)
+                for shard_spec in shards.split(",")
+            )
+        )
     else:
         shard_paths = list(shards)
 
-    shard_paths = sorted(path for path in shard_paths if path.endswith(".tar"))
+    shard_paths = sorted(
+        dict.fromkeys(path for path in shard_paths if path.endswith(".tar"))
+    )
     if not shard_paths:
         raise FileNotFoundError(f"No .tar WebDataset shards found for: {shards}")
     return shard_paths

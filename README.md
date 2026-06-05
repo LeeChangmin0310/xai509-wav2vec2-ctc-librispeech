@@ -1,9 +1,10 @@
 # XAI 509 Wav2Vec2 CTC Project
 
 This project fine-tunes Wav2Vec 2.0 with CTC loss, runs inference on LibriSpeech
-`test-clean` and `test-other`, and records WER for ASR-initialized final
-experiments plus diagnostic base-model runs. Hugging Face model loss is the
-default; the provided custom CTC implementation remains available explicitly.
+`test-clean` and `test-other`, and records WER for ASR-initialized
+proper-validation experiments plus diagnostic base-model runs. Hugging Face
+model loss is the default; the provided custom CTC implementation remains
+available explicitly.
 
 Final WebDataset `.tar` shards are read directly. Do not extract them.
 
@@ -18,8 +19,10 @@ Final WebDataset `.tar` shards are read directly. Do not extract them.
   now disables SpecAugment by default.
 - ASR-init smoke training has finite train and evaluation loss. A 20-sample
   bounded check produced `0.1049` test-clean WER and `0.1301` test-other WER.
-- Final ASR-initialized experiments are complete. The best checkpoint is
-  `asrinit_lr1e-5_fp32_fixed`; beam decoding gives the lowest final WER.
+- Completed ASR-initialized runs are useful diagnostics, but they used
+  `test-clean` as the Trainer evaluation split. The stricter proper-validation
+  queue now trains on four train shards, validates on one held-out train shard,
+  and reserves `test-clean`/`test-other` for final inference only.
 
 ## Environment Setup
 
@@ -158,11 +161,14 @@ python scripts/check_predictions_nonempty.py \
   results/smoke_asrinit/test_other_result.txt
 ```
 
-## ASR-Initialized Final Experiments
+## ASR-Initialized Diagnostic Experiments
 
-The final result path starts from `facebook/wav2vec2-base-960h`, trains in fp32,
-disables SpecAugment, uses Hugging Face CTC loss, and enables
+This completed result path starts from `facebook/wav2vec2-base-960h`, trains in
+fp32, disables SpecAugment, uses Hugging Face CTC loss, and enables
 `ctc_zero_infinity`. Inference uses fp16 by default when CUDA is available.
+These runs were important for debugging and model selection, but they are not the
+strictest comparison because `test-clean` was also used as the Trainer
+evaluation/checkpoint-selection split.
 
 Launch the complete resumable queue on one GPU:
 
@@ -174,7 +180,7 @@ Set `INFERENCE_FP16=0` to disable fp16 inference. Set `FORCE=1` to rerun
 completed checkpoints and transcripts. Failures are appended to
 `logs/failed_asrinit_experiments.txt`.
 
-The final queue order is:
+The diagnostic queue order is:
 
 | Experiment | Learning rate | Freezing | Notes |
 | --- | ---: | --- | --- |
@@ -186,10 +192,12 @@ The final queue order is:
 | `asrinit_freeze3_lr3e-6_fp32` | `3e-6` | First 3 encoder layers | fp32 |
 | `asrinit_layerwise_lr_decay_fixed` | encoder top: `3e-6`, head: `1e-5` | Feature extractor | Decay rate `0.9` |
 
-### Final Results
+### Diagnostic Results
 
 The failed pre-fix `asrinit_lr1e-5_fp32` row with WER `1.0` is excluded from
-final comparisons. It was produced before SpecAugment was disabled.
+comparisons. It was produced before SpecAugment was disabled. Treat the table
+below as a completed diagnostic result set; use the proper-validation queue for
+the stricter final setup.
 
 | Experiment | Decoding | test-clean WER | test-other WER |
 | --- | --- | ---: | ---: |
@@ -211,11 +219,60 @@ Beam decoding gives a small additional improvement over greedy decoding:
 pretrained control, the final beam result reduces WER by `25.19%` and `19.95%`
 relative on the two splits.
 
-Generate the filtered final Markdown summary and plot with:
+Generate the filtered diagnostic Markdown summary and plot with:
 
 ```bash
 python scripts/summarize_results.py \
   --input_csv results/wer_summary_asrinit_final.csv
+```
+
+## Proper Validation Split
+
+For a stricter final experiment family, Trainer validation uses a held-out train
+shard rather than `test-clean`. The split is:
+
+```text
+train_shards = data/train/shard-000000.tar,data/train/shard-000001.tar,data/train/shard-000002.tar,data/train/shard-000003.tar
+eval_shards  = data/train/shard-000004.tar
+final tests  = data/test-clean and data/test-other
+```
+
+This keeps `test-clean` and `test-other` reserved for final inference/WER
+evaluation only.
+
+Launch the resumable proper-validation queue on one RTX 3090:
+
+```bash
+GPU_ID=0 CONTINUE_ON_ERROR=1 bash scripts/run_asrinit_properval_queue_3090.sh
+```
+
+Set `FORCE=1` to rerun completed stages. Failures are appended to
+`logs/failed_properval_experiments.txt`. The queue writes:
+
+```text
+outputs/<experiment_name>/
+results/<experiment_name>/
+logs/<experiment_name>.log
+results/wer_summary_properval.csv
+```
+
+The proper-validation queue order is:
+
+| Experiment | Learning rate | Freezing | Notes |
+| --- | ---: | --- | --- |
+| `asr_pretrained_960h_full_properval` | - | None | Inference-only pretrained control |
+| `asrinit_lr1e-6_fp32_properval` | `1e-6` | None | Four train shards, held-out train validation |
+| `asrinit_lr3e-6_fp32_properval` | `3e-6` | None | Four train shards, held-out train validation |
+| `asrinit_lr1e-5_fp32_properval` | `1e-5` | None | Four train shards, held-out train validation |
+| `asrinit_freeze_feature_lr3e-6_fp32_properval` | `3e-6` | Feature encoder | fp32 |
+| `asrinit_freeze3_lr3e-6_fp32_properval` | `3e-6` | First 3 encoder layers | fp32 |
+| `asrinit_layerwise_lr_decay_properval` | encoder top: `3e-6`, head: `1e-5` | Feature extractor | Decay rate `0.9` |
+
+Summarize strict results after the queue finishes:
+
+```bash
+python scripts/summarize_results.py \
+  --input_csv results/wer_summary_properval.csv
 ```
 
 ## Original Base Queue
@@ -296,6 +353,7 @@ Training supports:
 
 ```text
 --train_shards
+--eval_shards
 --test_clean_shards
 --test_other_shards
 --model_name_or_path
@@ -346,9 +404,12 @@ results/wer_summary_asrinit.csv
 results/wer_summary_asrinit.md
 results/wer_summary_asrinit_final.csv
 results/wer_summary_asrinit_final.md
+results/wer_summary_properval.csv
+results/wer_summary_properval.md
 results/figures/wer_barplot.png
 results/figures/wer_barplot_asrinit.png
 results/figures/wer_barplot_asrinit_final.png
+results/figures/wer_barplot_properval.png
 ```
 
 ## Monitoring
@@ -367,6 +428,8 @@ tail -f logs/baseline_lr1e-4.log
 cat logs/failed_experiments.txt
 tail -f logs/asrinit_lr3e-6_fp32.log
 cat logs/failed_asrinit_experiments.txt
+tail -f logs/asrinit_lr3e-6_fp32_properval.log
+cat logs/failed_properval_experiments.txt
 ```
 
 ## Result Summary
@@ -379,6 +442,8 @@ python scripts/summarize_results.py \
   --input_csv results/wer_summary_asrinit.csv
 python scripts/summarize_results.py \
   --input_csv results/wer_summary_asrinit_final.csv
+python scripts/summarize_results.py \
+  --input_csv results/wer_summary_properval.csv
 ```
 
 The CSV and Markdown summary support training settings, decoding method,
@@ -414,6 +479,9 @@ artifacts.
 - Interrupted ASR-init queue: rerun `scripts/run_asrinit_queue_3090.sh`.
   Existing checkpoints, transcripts, and summary rows are reused unless
   `FORCE=1`.
+- Interrupted proper-validation queue: rerun
+  `scripts/run_asrinit_properval_queue_3090.sh`. Existing checkpoints,
+  transcripts, and summary rows are reused unless `FORCE=1`.
 - Model download errors: make sure the Hugging Face cache is writable and the
   initial `facebook/wav2vec2-base` download can reach the network.
 - Beam dependency errors: install `pyctcdecode`. KenLM is not required for the
@@ -443,6 +511,11 @@ artifacts.
   and inspect `reports/blank_collapse_debug.md`.
 - Failed/debug rows: exclude the old `asrinit_lr1e-5_fp32` WER `1.0` row from
   final comparisons. Use `results/wer_summary_asrinit_final.csv`.
+- Strict split caveat: the completed ASR-init diagnostic results used
+  `test-clean` as Trainer evaluation data. Use
+  `scripts/run_asrinit_properval_queue_3090.sh` and
+  `results/wer_summary_properval.csv` for the stricter held-out-train
+  validation setup.
 
 ## Lightweight Checks
 

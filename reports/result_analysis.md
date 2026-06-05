@@ -2,11 +2,31 @@
 
 ## Scope
 
-Final comparisons use `results/wer_summary_asrinit_final.csv`. The old
-`asrinit_lr1e-5_fp32` row with WER `1.0` is excluded because it was produced
-before the SpecAugment stability fix.
+The completed ASR-initialized results in `results/wer_summary_asrinit_final.csv`
+are useful for diagnosis and preliminary comparison, but they are not the
+strictest final comparison because `test-clean` was used as the Trainer
+evaluation/checkpoint-selection split. The old `asrinit_lr1e-5_fp32` row with
+WER `1.0` is excluded because it was produced before the SpecAugment stability
+fix.
 
-## Final Results
+The stricter follow-up uses `results/wer_summary_properval.csv` after running
+`scripts/run_asrinit_properval_queue_3090.sh`: four train shards are used for
+training, `data/train/shard-000004.tar` is used for Trainer validation, and
+`test-clean`/`test-other` are reserved for final inference and WER only.
+
+## Proper-Validation Results (Pending)
+
+| Experiment | Trainer validation split | test-clean WER | test-other WER | Notes |
+| --- | --- | ---: | ---: | --- |
+| `asr_pretrained_960h_full_properval` | None | TBD | TBD | Inference-only ASR control |
+| `asrinit_lr1e-6_fp32_properval` | Held-out train shard | TBD | TBD | LR sweep |
+| `asrinit_lr3e-6_fp32_properval` | Held-out train shard | TBD | TBD | LR sweep |
+| `asrinit_lr1e-5_fp32_properval` | Held-out train shard | TBD | TBD | LR sweep |
+| `asrinit_freeze_feature_lr3e-6_fp32_properval` | Held-out train shard | TBD | TBD | Freeze feature encoder |
+| `asrinit_freeze3_lr3e-6_fp32_properval` | Held-out train shard | TBD | TBD | Freeze first 3 encoder layers |
+| `asrinit_layerwise_lr_decay_properval` | Held-out train shard | TBD | TBD | Layer-wise LR decay |
+
+## Completed Diagnostic ASR-Init Results
 
 | Experiment | Decoding | test-clean WER | test-other WER |
 | --- | --- | ---: | ---: |
@@ -21,7 +41,8 @@ before the SpecAugment stability fix.
 
 ## Main Findings
 
-Among the tested learning rates, `1e-5` helped most. With greedy decoding,
+For the completed diagnostic run family, `1e-5` helped most among the tested
+learning rates. With greedy decoding,
 `asrinit_lr1e-5_fp32_fixed` reduced WER relative to the pretrained ASR control
 by `0.045154` on test-clean and `0.046043` on test-other. These correspond to
 relative reductions of `24.26%` and `18.73%`.
@@ -54,7 +75,8 @@ Wav2Vec2 model, and SpecAugment disabled.
 
 ## Conservative Interpretation
 
-The results support three narrow conclusions for the tested configurations:
+The completed diagnostic results support three narrow conclusions for the tested
+configurations:
 
 1. ASR-initialized fine-tuning at learning rate `1e-5` improved both test splits
    most among the evaluated learning rates.
@@ -64,4 +86,5 @@ The results support three narrow conclusions for the tested configurations:
    checkpoint.
 
 These results do not establish that freezing or layer-wise decay cannot help
-under other schedules, seeds, or data regimes.
+under other schedules, seeds, data regimes, or the stricter proper-validation
+selection setup.

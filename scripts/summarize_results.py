@@ -23,6 +23,13 @@ EXPERIMENT_ORDER = [
     "asrinit_freeze_feature_lr3e-6_fp32",
     "asrinit_freeze3_lr3e-6_fp32",
     "asrinit_layerwise_lr_decay_fixed",
+    "asr_pretrained_960h_full_properval",
+    "asrinit_lr1e-6_fp32_properval",
+    "asrinit_lr3e-6_fp32_properval",
+    "asrinit_lr1e-5_fp32_properval",
+    "asrinit_freeze_feature_lr3e-6_fp32_properval",
+    "asrinit_freeze3_lr3e-6_fp32_properval",
+    "asrinit_layerwise_lr_decay_properval",
 ]
 
 

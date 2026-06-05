@@ -49,3 +49,13 @@ results/figures/wer_barplot_asrinit.png
 !results/wer_summary_asrinit_final.md
 !results/figures/wer_barplot_asrinit_final.png
 *.tar.gz
+
+# Non-final proper-validation summaries
+results/wer_summary_properval.csv
+results/wer_summary_properval.md
+results/figures/wer_barplot_properval.png
+
+# Keep final proper-validation summaries tracked
+!results/wer_summary_properval_final.csv
+!results/wer_summary_properval_final.md
+!results/figures/wer_barplot_properval_final.png

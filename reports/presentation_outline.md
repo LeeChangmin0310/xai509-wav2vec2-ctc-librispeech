@@ -1,91 +1,66 @@
 # Presentation Outline
 
-## 1. Project Goal
+## Slide 1: Goal
 
-- Fine-tune Wav2Vec 2.0 with the Hugging Face CTC loss path.
-- Compare ASR-initialized learning-rate, freezing, and layer-wise LR decay strategies.
-- Select checkpoints on a held-out train shard, then evaluate `test-clean` and
-  `test-other` only at the end.
+- Fine-tune Wav2Vec2 CTC for LibriSpeech ASR.
+- Use strict model selection: train-shard validation, final test-only WER.
+- Main metric: WER on `test-clean` and `test-other`.
 
-## 2. Experimental Setup
+## Slide 2: Strict Data Split
 
-- GPU: single RTX 3090
-- Final initialization: `facebook/wav2vec2-base-960h`
-- Training data: `data/train/shard-000000.tar` through
-  `data/train/shard-000003.tar`
-- Trainer validation: `data/train/shard-000004.tar`
-- Final evaluation: `data/test-clean` and `data/test-other`
-- Evaluation metric: word error rate (WER)
-- Stability settings: fp32 training, SpecAugment disabled, `ctc_zero_infinity`
+- Train: `data/train/shard-000000.tar` through `shard-000003.tar`.
+- Validation/checkpoint selection: `data/train/shard-000004.tar`.
+- Final evaluation only: `data/test-clean` and `data/test-other`.
+- Final WebDataset tar shards were not extracted.
 
-## 3. Proper-Validation Results (Pending)
+## Slide 3: Stable Training Setup
 
-| Experiment | test-clean WER | test-other WER |
-| --- | ---: | ---: |
-| `asr_pretrained_960h_full_properval` | TBD | TBD |
-| `asrinit_lr1e-6_fp32_properval` | TBD | TBD |
-| `asrinit_lr3e-6_fp32_properval` | TBD | TBD |
-| `asrinit_lr1e-5_fp32_properval` | TBD | TBD |
-| `asrinit_freeze_feature_lr3e-6_fp32_properval` | TBD | TBD |
-| `asrinit_freeze3_lr3e-6_fp32_properval` | TBD | TBD |
-| `asrinit_layerwise_lr_decay_properval` | TBD | TBD |
+- Initialization: `facebook/wav2vec2-base-960h`.
+- Loss: Hugging Face CTC loss.
+- Training: fp32, `ctc_zero_infinity`, no loss-forward attention mask.
+- SpecAugment disabled because train-mode SpecAugment produced NaN logits.
 
-## 4. Diagnostic Pretrained ASR Control
+## Slide 4: Final Result Table
 
-- Control configuration: `asr_pretrained_960h_full`
-- `test-clean` WER: `0.186112`
-- `test-other` WER: `0.245802`
-- Caveat: this diagnostic run family used `test-clean` as Trainer evaluation.
+| Experiment | Decoding | test-clean | test-other |
+| --- | --- | ---: | ---: |
+| ASR pretrained control | Greedy | `0.186112` | `0.245802` |
+| LR `1e-6` | Greedy | `0.180558` | `0.240567` |
+| LR `3e-6` | Greedy | `0.169678` | `0.229620` |
+| LR `1e-5` | Greedy | `0.154709` | `0.214737` |
+| Freeze feature encoder | Greedy | `0.181566` | `0.241809` |
+| Freeze first 3 layers | Greedy | `0.176126` | `0.236612` |
+| Layer-wise LR decay | Greedy | `0.184742` | `0.244292` |
+| LR `1e-5` | Beam | **`0.152598`** | **`0.212235`** |
 
-## 5. Diagnostic ASR-Initialized Learning-Rate Sweep
+## Slide 5: Best Model
 
-| Experiment | test-clean WER | test-other WER |
-| --- | ---: | ---: |
-| `asrinit_lr1e-6_fp32` | `0.181223` | `0.241274` |
-| `asrinit_lr3e-6_fp32` | `0.164029` | `0.224137` |
-| `asrinit_lr1e-5_fp32_fixed` | **`0.140958`** | **`0.199759`** |
+- Best final model: `asrinit_lr1e-5_fp32_properval_beam`.
+- Absolute WER improvement over ASR control:
+  `0.033514` test-clean, `0.033567` test-other.
+- Relative WER reduction:
+  `18.01%` test-clean, `13.66%` test-other.
+- Beam decoding added a small gain over greedy decoding.
 
-## 6. Diagnostic ASR-Initialized Freezing Sweep
+## Slide 6: Experiment Trends
 
-| Experiment | test-clean WER | test-other WER |
-| --- | ---: | ---: |
-| `asrinit_freeze_feature_lr3e-6_fp32` | `0.180044` | `0.240682` |
-| `asrinit_freeze3_lr3e-6_fp32` | `0.172208` | `0.232639` |
+- LR `1e-5` helped most among tested greedy runs.
+- Freezing feature encoder or early encoder layers did not beat unfrozen tuning.
+- The tested layer-wise LR decay setup stayed close to the pretrained control.
+- Test-other remained harder than test-clean for every configuration.
 
-## 7. Test-Clean Versus Test-Other
+## Slide 7: Debugging Story
 
-- Every configuration had higher WER on test-other.
-- Best greedy gap: `0.058801`; best beam gap: `0.057533`.
-- Interpretation: test-other remains the more challenging split.
+- Base Wav2Vec2 fine-tuning collapsed to blank predictions.
+- Pretrained ASR inference control worked, so data/inference/WER were sound.
+- ASR-init training exposed NaN loss/logits.
+- Probe showed train-mode SpecAugment caused NaN logits.
+- Disabling SpecAugment made training numerically stable.
 
-## 8. Diagnostic Layer-Wise LR Decay
+## Slide 8: Takeaways
 
-| Experiment | test-clean WER | test-other WER |
-| --- | ---: | ---: |
-| `asrinit_layerwise_lr_decay_fixed` | `0.184438` | `0.244312` |
-
-- The tested layer-wise schedule did not improve WER.
-
-## 9. Original Base-Model Failure Analysis
-
-- `facebook/wav2vec2-base` fine-tuning collapsed to blank predictions.
-- Train-mode SpecAugment produced NaN logits.
-- Setting `apply_spec_augment=False` restored finite forward loss.
-- ASR-init 20-sample smoke WER: clean `0.1049`, other `0.1301`.
-- Exclude the pre-fix `asrinit_lr1e-5_fp32` WER `1.0` debug row.
-
-## 10. Optional Beam Decoding
-
-- Selected checkpoint: `asrinit_lr1e-5_fp32_fixed`
-- Beam width: `100`
-- Greedy: clean `0.140958`, other `0.199759`
-- Beam: clean `0.139227`, other `0.196760`
-- Beam search gave a small additional improvement.
-
-## 11. Final Interpretation
-
-- Diagnostic best experiment: `asrinit_lr1e-5_fp32_fixed` with beam decoding.
-- In diagnostic runs, LR `1e-5` helped most among the tested learning rates.
-- Freezing did not help as much; layer-wise decay did not improve WER.
-- Proper-validation results should become the strict final comparison because
-  `test-clean` and `test-other` are held out until final evaluation.
+- Strict proper-validation results are the final comparison.
+- ASR-initialized `1e-5` fine-tuning was the best tested greedy setup.
+- Beam decoding gave the best final WER.
+- Claims are conservative: other seeds, schedules, or decoding settings could
+  change the outcome.

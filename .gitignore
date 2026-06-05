@@ -59,3 +59,9 @@ results/figures/wer_barplot_properval.png
 !results/wer_summary_properval_final.csv
 !results/wer_summary_properval_final.md
 !results/figures/wer_barplot_properval_final.png
+
+# Local presentation / submission files
+*.pptx
+*.key
+*.pdf
+xai509_wav2vec2_ctc_submission_snapshot.tar.gz

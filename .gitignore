@@ -48,3 +48,4 @@ results/figures/wer_barplot_asrinit.png
 !results/wer_summary_asrinit_final.csv
 !results/wer_summary_asrinit_final.md
 !results/figures/wer_barplot_asrinit_final.png
+*.tar.gz

@@ -65,3 +65,31 @@ results/figures/wer_barplot_properval.png
 *.key
 *.pdf
 xai509_wav2vec2_ctc_submission_snapshot.tar.gz
+
+# Strict ASR experiment raw/intermediate artifacts
+results/base_strict_debug/
+results/base_strict_smoke/
+results/base_strict_cv/*/
+results/base_strict_exploratory/*/
+results/base_strict_exploratory/*_predictions.txt
+results/base_strict_final/*_predictions.txt
+results/base_strict_final/lm_training_text.txt
+results/base_strict_final/train_text_trigram_lm.json
+
+# Keep compact committed summaries explicitly trackable
+!results/base_strict_cv/strict_cv_summary.csv
+!results/base_strict_cv/selected_acoustic_config.json
+!results/base_strict_cv/fold0_blank_diagnostics_summary.csv
+!results/base_strict_cv/specaugment_finite_loss_check.json
+!results/base_strict_final/selected_decoder_config.json
+!results/base_strict_final/wer_summary.csv
+!results/base_strict_final/selected_acoustic_config.json
+!results/base_strict_final/strict_cv_summary.csv
+!results/base_strict_final/validation_decoding_sweep.csv
+!results/base_strict_final/validation_greedy_wer.csv
+!results/base_strict_final/validation_ref_hyp_examples.txt
+!results/base_strict_final/acoustic_run_metadata.json
+!results/base_strict_exploratory/h_fold_ensemble_validation.csv
+!results/base_strict_exploratory/h_fold_ensemble_test_summary.csv
+!results/base_strict_exploratory/h_alltrain_wer_summary.csv
+!results/base_strict_exploratory/selected_h_fold_ensemble.json

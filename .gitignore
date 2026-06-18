@@ -1,95 +1,36 @@
-# Original course skeleton
-course_skeleton/
-
-# Data and model artifacts
-data/
+# Local datasets and downloaded archives
+data/*
+!data/README.md
 downloads/
-outputs/
-checkpoints/
+course_skeleton/
 submission_snapshot/
 *.tar
-*.pt
-*.pth
-*.ckpt
-*.bin
-*.safetensors
+*.tar.gz
 
-# Logs and caches
+# Generated models, predictions, sweeps, and logs
+outputs/
+checkpoints/
 logs/
-.cache/
+results/*
+!results/strict_final_summary.csv
+!results/exploratory_summary.csv
+!results/selected_decoder_config.json
+
+# Python and experiment caches
 __pycache__/
-*.pyc
-*.log
+*.py[cod]
+.cache/
+.pytest_cache/
 wandb/
 runs/
 
-# Large generated inference transcripts
-results/*/test_clean_result.txt
-results/*/test_other_result.txt
-results/*/metadata.json
-results/smoke/
-
-# OS / editor
-.DS_Store
+# Local environments and editor files
 .venv/
 .vscode/
 .idea/
+.DS_Store
 
-# Non-final result summaries
-results/wer_summary.csv
-results/wer_summary.md
-results/wer_summary_asrinit.csv
-results/wer_summary_asrinit.md
-results/wer_summary_debug.csv
-results/figures/wer_barplot.png
-results/figures/wer_barplot_asrinit.png
-
-# Keep final ASR-init summaries tracked when explicitly added
-!results/wer_summary_asrinit_final.csv
-!results/wer_summary_asrinit_final.md
-!results/figures/wer_barplot_asrinit_final.png
-*.tar.gz
-
-# Non-final proper-validation summaries
-results/wer_summary_properval.csv
-results/wer_summary_properval.md
-results/figures/wer_barplot_properval.png
-
-# Keep final proper-validation summaries tracked
-!results/wer_summary_properval_final.csv
-!results/wer_summary_properval_final.md
-!results/figures/wer_barplot_properval_final.png
-
-# Local presentation / submission files
+# Presentation exports
 *.pptx
 *.key
 *.pdf
-xai509_wav2vec2_ctc_submission_snapshot.tar.gz
-
-# Strict ASR experiment raw/intermediate artifacts
-results/base_strict_debug/
-results/base_strict_smoke/
-results/base_strict_cv/*/
-results/base_strict_exploratory/*/
-results/base_strict_exploratory/*_predictions.txt
-results/base_strict_final/*_predictions.txt
-results/base_strict_final/lm_training_text.txt
-results/base_strict_final/train_text_trigram_lm.json
-
-# Keep compact committed summaries explicitly trackable
-!results/base_strict_cv/strict_cv_summary.csv
-!results/base_strict_cv/selected_acoustic_config.json
-!results/base_strict_cv/fold0_blank_diagnostics_summary.csv
-!results/base_strict_cv/specaugment_finite_loss_check.json
-!results/base_strict_final/selected_decoder_config.json
-!results/base_strict_final/wer_summary.csv
-!results/base_strict_final/selected_acoustic_config.json
-!results/base_strict_final/strict_cv_summary.csv
-!results/base_strict_final/validation_decoding_sweep.csv
-!results/base_strict_final/validation_greedy_wer.csv
-!results/base_strict_final/validation_ref_hyp_examples.txt
-!results/base_strict_final/acoustic_run_metadata.json
-!results/base_strict_exploratory/h_fold_ensemble_validation.csv
-!results/base_strict_exploratory/h_fold_ensemble_test_summary.csv
-!results/base_strict_exploratory/h_alltrain_wer_summary.csv
-!results/base_strict_exploratory/selected_h_fold_ensemble.json

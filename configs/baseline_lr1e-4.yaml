@@ -1,6 +1,0 @@
-experiment: baseline_lr1e-4
-train_setting: full_finetuning
-learning_rate: 1.0e-4
-freeze_setting: none
-layerwise_lr_decay: false
-decoding_method: greedy

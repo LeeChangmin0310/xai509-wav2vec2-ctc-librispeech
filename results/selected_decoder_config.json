@@ -1,0 +1,13 @@
+{
+  "acoustic_checkpoint": "outputs/strict_final/best_model",
+  "alpha": 0.3,
+  "attention_mask_passed": false,
+  "beam_width": 50,
+  "beta": 1.5,
+  "decoding_method": "beam_lm",
+  "language_model_path": "outputs/strict_final/train_text_trigram_lm.json",
+  "selection_source": "validation_only",
+  "test_splits_used_for_selection": false,
+  "validation_shards": "data/train/shard-000004.tar",
+  "validation_wer": 0.228486646884273
+}

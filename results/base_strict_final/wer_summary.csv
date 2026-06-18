@@ -1,2 +1,0 @@
-selected_acoustic_candidate,selected_acoustic_id,cv_mean_wer,cv_std_wer,validation_greedy_wer,validation_best_beam_wer,validation_best_lm_fusion_wer,test_clean_wer,test_other_wer,decoder_type,beam_width,alpha,beta,checkpoint_path
-two_stage_head_warmup,H,0.22579227652858,0.012594776435910855,0.23293768545994065,0.23293768545994065,0.228486646884273,0.24638618381010347,0.3292894942972317,beam_lm,50,0.3,1.5,outputs/base_strict_final/best_model

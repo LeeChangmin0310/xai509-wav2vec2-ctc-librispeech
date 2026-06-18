@@ -3,7 +3,12 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import argparse
+import csv
+import itertools
+import json
 import os
+import time
+from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Union
 
@@ -13,6 +18,7 @@ from jiwer import wer
 from transformers import (
     AutoModelForCTC,
     AutoProcessor,
+    EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
     set_seed,
@@ -20,6 +26,11 @@ from transformers import (
 
 import ctc_loss
 import sample_util
+from experiment_guard import (
+    ALLOWED_MAIN_SOURCE,
+    validate_checkpoint_role,
+    write_checkpoint_provenance,
+)
 
 
 def parse_args():
@@ -34,6 +45,12 @@ def parse_args():
     parser.add_argument("--test_other_shards", default="data/test-other")
     parser.add_argument("--model_name_or_path", default="facebook/wav2vec2-base")
     parser.add_argument("--output_dir", default="outputs/baseline_lr1e-4")
+    parser.add_argument(
+        "--experiment_role",
+        choices=("main", "positive_control_only", "diagnostic"),
+        default="main",
+        help="Main runs enforce unsupervised-base provenance and strict data isolation.",
+    )
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--num_train_epochs", type=float, default=3.0)
     parser.add_argument("--per_device_train_batch_size", type=int, default=8)
@@ -51,6 +68,11 @@ def parse_args():
         help="Limit validation samples for smoke tests.",
     )
     parser.add_argument("--freeze_feature_encoder", action="store_true")
+    parser.add_argument(
+        "--freeze_wav2vec2",
+        action="store_true",
+        help="Freeze the complete Wav2Vec2 backbone and train only the CTC head.",
+    )
     parser.add_argument("--freeze_n_layers", type=int, default=0)
     parser.add_argument(
         "--layerwise_lr_decay",
@@ -75,6 +97,51 @@ def parse_args():
     )
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--warmup_ratio", type=float, default=0.0)
+    parser.add_argument("--max_grad_norm", type=float, default=1.0)
+    parser.add_argument("--early_stopping_patience", type=int, default=0)
+    parser.add_argument("--early_stopping_threshold", type=float, default=0.0)
+    parser.add_argument(
+        "--early_stopping_start_epoch",
+        type=float,
+        default=0.0,
+        help="Do not count early-stopping patience before this epoch.",
+    )
+    parser.add_argument(
+        "--eval_delay",
+        type=float,
+        default=0.0,
+        help="Delay evaluation/early-stopping checks by this many epochs or steps.",
+    )
+    parser.add_argument("--logging_steps", type=int, default=10)
+    parser.add_argument("--save_total_limit", type=int, default=2)
+    load_best_group = parser.add_mutually_exclusive_group()
+    load_best_group.add_argument(
+        "--load_best_model_at_end",
+        dest="load_best_model_at_end",
+        action="store_true",
+    )
+    load_best_group.add_argument(
+        "--no_load_best_model_at_end",
+        dest="load_best_model_at_end",
+        action="store_false",
+        help="Keep the last model, used for a fixed-length head-warmup stage.",
+    )
+    parser.set_defaults(load_best_model_at_end=True)
+    parser.add_argument(
+        "--resume_from_checkpoint",
+        help="Checkpoint path to resume, or 'latest' to use Trainer discovery.",
+    )
+    parser.add_argument("--final_model_subdir", default="final_model")
+    parser.add_argument("--training_log_csv")
+    parser.add_argument("--validation_history_csv")
+    parser.add_argument("--run_metadata_json")
+    parser.add_argument(
+        "--finite_loss_check_samples",
+        type=int,
+        default=2,
+        help="Number of samples in the pre-training finite-loss gate.",
+    )
     parser.add_argument(
         "--loss_impl",
         choices=("hf", "custom"),
@@ -96,7 +163,7 @@ def parse_args():
         "--disable_spec_augment",
         dest="apply_spec_augment",
         action="store_false",
-        help="Disable SpecAugment during fine-tuning. This is the stable default.",
+        help="Disable SpecAugment during diagnostic or positive-control runs.",
     )
     spec_augment_group.add_argument(
         "--enable_spec_augment",
@@ -117,7 +184,22 @@ def parse_args():
         action="store_false",
         help="Never pass an attention mask during the loss forward pass.",
     )
-    parser.set_defaults(apply_spec_augment=False, use_attention_mask_for_loss=None)
+    parser.set_defaults(apply_spec_augment=None, use_attention_mask_for_loss=None)
+    parser.add_argument("--mask_time_prob", type=float)
+    parser.add_argument("--mask_time_length", type=int)
+    parser.add_argument("--mask_time_min_masks", type=int)
+    parser.add_argument("--mask_feature_prob", type=float)
+    parser.add_argument("--mask_feature_length", type=int)
+    parser.add_argument(
+        "--blank_bias_init",
+        type=float,
+        help="Diagnostic initialization for the CTC blank-token output bias.",
+    )
+    parser.add_argument(
+        "--local_files_only",
+        action="store_true",
+        help="Load cached model and processor files without network access.",
+    )
     parser.add_argument(
         "--dry_run",
         action="store_true",
@@ -126,16 +208,255 @@ def parse_args():
     return parser.parse_args()
 
 
+def resolve_spec_augment(args) -> bool:
+    """Use SpecAugment by default for main runs and preserve diagnostic control."""
+    if args.apply_spec_augment is not None:
+        return args.apply_spec_augment
+    return args.experiment_role == "main"
+
+
+def validate_strict_main_args(args) -> None:
+    """Enforce checkpoint provenance and train-only hyperparameter selection."""
+    validate_checkpoint_role(
+        args.model_name_or_path,
+        args.experiment_role,
+        require_base_source=False,
+    )
+    if args.experiment_role != "main":
+        return
+
+    if args.eval_shards is None:
+        raise ValueError("--eval_shards is required for a main experiment.")
+    for name, shard_spec in (
+        ("train_shards", args.train_shards),
+        ("eval_shards", args.eval_shards),
+    ):
+        normalized = shard_spec.lower()
+        if "test-clean" in normalized or "test-other" in normalized:
+            raise ValueError(
+                f"--{name} must contain train shards only for a main experiment."
+            )
+    if args.loss_impl != "hf":
+        raise ValueError("Main experiments require --loss_impl hf.")
+    if not args.ctc_zero_infinity:
+        raise ValueError("Main experiments require --ctc_zero_infinity.")
+    if not args.apply_spec_augment:
+        raise ValueError(
+            "Main experiments require SpecAugment ON. Use --enable_spec_augment."
+        )
+    if args.fp16:
+        raise ValueError("Strict main training starts in fp32; do not pass --fp16.")
+    if args.finite_loss_check_samples <= 0:
+        raise ValueError("Main experiments require a finite-loss preflight batch.")
+    if args.load_best_model_at_end and args.early_stopping_patience <= 0:
+        raise ValueError("Main experiments require positive early-stopping patience.")
+    if not args.load_best_model_at_end and args.early_stopping_patience > 0:
+        raise ValueError(
+            "Early stopping requires --load_best_model_at_end. Use patience 0 "
+            "for a fixed-length warmup stage."
+        )
+    if args.early_stopping_start_epoch < 0:
+        raise ValueError("--early_stopping_start_epoch must be non-negative.")
+    if args.eval_delay < 0:
+        raise ValueError("--eval_delay must be non-negative.")
+    if not 0.0 <= args.warmup_ratio < 1.0:
+        raise ValueError("--warmup_ratio must be in the interval [0, 1).")
+    if args.max_grad_norm <= 0.0:
+        raise ValueError("--max_grad_norm must be greater than zero.")
+
+
+def configure_spec_augment_parameters(model, args) -> None:
+    """Apply optional lighter SpecAugment settings without disabling masking."""
+    for name in (
+        "mask_time_prob",
+        "mask_time_length",
+        "mask_time_min_masks",
+        "mask_feature_prob",
+        "mask_feature_length",
+    ):
+        value = getattr(args, name)
+        if value is not None:
+            setattr(model.config, name, value)
+            if hasattr(model, "wav2vec2") and hasattr(model.wav2vec2, "config"):
+                setattr(model.wav2vec2.config, name, value)
+
+
+def write_log_history_csv(log_history: List[Dict], output_path: Optional[str]) -> None:
+    """Write heterogeneous Trainer log records to a CSV file."""
+    if not output_path:
+        return
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    fieldnames = sorted({key for record in log_history for key in record})
+    with open(output_path, "w", encoding="utf-8", newline="") as output_file:
+        writer = csv.DictWriter(output_file, fieldnames=fieldnames)
+        writer.writeheader()
+        for record in log_history:
+            writer.writerow(record)
+
+
+def write_validation_history_csv(
+    log_history: List[Dict], output_path: Optional[str]
+) -> None:
+    """Write only validation records, including WER, loss, epoch, and step."""
+    if not output_path:
+        return
+    validation_records = [
+        record for record in log_history if "eval_wer" in record
+    ]
+    write_log_history_csv(validation_records, output_path)
+
+
+def run_finite_loss_preflight(
+    model,
+    processor,
+    train_dataset,
+    args,
+    use_attention_mask_for_loss: bool,
+) -> Dict:
+    """Run one train-mode SpecAugment forward and reject non-finite CTC inputs."""
+    samples = list(
+        itertools.islice(iter(train_dataset), args.finite_loss_check_samples)
+    )
+    if not samples:
+        raise RuntimeError("Finite-loss preflight could not load a training sample.")
+
+    collator = DataCollatorCTCWithPadding(processor=processor)
+    batch = collator(samples)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    batch = {key: value.to(device) for key, value in batch.items()}
+    labels = batch["labels"]
+    attention_mask = (
+        batch.get("attention_mask") if use_attention_mask_for_loss else None
+    )
+
+    if not torch.isfinite(batch["input_values"]).all().item():
+        raise RuntimeError("Finite-loss preflight found non-finite input_values.")
+    valid_label_mask = labels.ne(-100)
+    if not ((labels >= 0) | labels.eq(-100)).all().item():
+        raise RuntimeError("Label padding must use -100 exclusively.")
+    valid_labels = labels[valid_label_mask]
+    if valid_labels.numel() == 0:
+        raise RuntimeError("Finite-loss preflight found an empty target batch.")
+    if valid_labels.max().item() >= model.config.vocab_size:
+        raise RuntimeError("Finite-loss preflight found an out-of-vocabulary label ID.")
+
+    raw_input_lengths = (
+        attention_mask.sum(dim=-1)
+        if attention_mask is not None
+        else torch.full(
+            (batch["input_values"].shape[0],),
+            batch["input_values"].shape[1],
+            device=device,
+            dtype=torch.long,
+        )
+    )
+    logit_lengths = model._get_feat_extract_output_lengths(raw_input_lengths)
+    target_lengths = valid_label_mask.sum(dim=-1)
+    if torch.any(target_lengths > logit_lengths).item():
+        raise RuntimeError(
+            "Finite-loss preflight found a target longer than its CTC input."
+        )
+
+    model.train()
+    with torch.no_grad():
+        outputs = model(
+            input_values=batch["input_values"],
+            attention_mask=attention_mask,
+            labels=labels,
+        )
+    logits_finite = torch.isfinite(outputs.logits).all().item()
+    loss_finite = outputs.loss is not None and torch.isfinite(outputs.loss).all().item()
+    details = {
+        "status": "pass" if logits_finite and loss_finite else "fail",
+        "device": str(device),
+        "model_name_or_path": args.model_name_or_path,
+        "experiment_role": args.experiment_role,
+        "apply_spec_augment": bool(model.config.apply_spec_augment),
+        "mask_time_prob": getattr(model.config, "mask_time_prob", None),
+        "mask_time_length": getattr(model.config, "mask_time_length", None),
+        "mask_feature_prob": getattr(model.config, "mask_feature_prob", None),
+        "mask_feature_length": getattr(model.config, "mask_feature_length", None),
+        "ctc_zero_infinity": bool(model.config.ctc_zero_infinity),
+        "attention_mask_passed": attention_mask is not None,
+        "input_shape": list(batch["input_values"].shape),
+        "label_shape": list(labels.shape),
+        "target_lengths": target_lengths.detach().cpu().tolist(),
+        "logit_lengths": logit_lengths.detach().cpu().tolist(),
+        "label_padding_uses_minus_100": True,
+        "inputs_finite": True,
+        "logits_finite": logits_finite,
+        "loss_finite": loss_finite,
+        "loss": None if outputs.loss is None else outputs.loss.detach().cpu().item(),
+    }
+    report_path = os.path.join(args.output_dir, "finite_loss_check.json")
+    os.makedirs(args.output_dir, exist_ok=True)
+    with open(report_path, "w", encoding="utf-8") as report_file:
+        json.dump(details, report_file, indent=2, sort_keys=True)
+        report_file.write("\n")
+    if not logits_finite or not loss_finite:
+        raise RuntimeError(
+            "SpecAugment-on finite-loss preflight failed. Full training was stopped; "
+            f"see {report_path}."
+        )
+    print(f"SpecAugment finite-loss preflight passed: {details}")
+    model.zero_grad(set_to_none=True)
+    return details
+
+
 def build_compute_metrics(processor):
-    """Create a WER metric callback bound to the selected processor."""
+    """Create WER and blank-collapse metrics for each validation evaluation."""
 
     def compute_metrics(pred) -> Dict[str, float]:
-        pred_ids = np.argmax(pred.predictions, axis=-1)
-        label_ids = pred.label_ids.copy()
-        label_ids[label_ids == -100] = processor.tokenizer.pad_token_id
-        predictions = processor.batch_decode(pred_ids)
-        references = processor.batch_decode(label_ids, group_tokens=False)
-        return {"wer": wer(references, predictions)}
+        if isinstance(pred.predictions, (tuple, list)):
+            logits, logit_lengths = pred.predictions
+            logit_lengths = np.asarray(logit_lengths).reshape(-1).astype(int)
+        else:
+            logits = pred.predictions
+            logit_lengths = np.full(logits.shape[0], logits.shape[1], dtype=int)
+
+        pred_ids = np.argmax(logits, axis=-1)
+        references = []
+        predictions = []
+        token_counts: Counter[int] = Counter()
+        for sample_ids, sample_length, sample_labels in zip(
+            pred_ids,
+            logit_lengths,
+            pred.label_ids,
+        ):
+            valid_pred_ids = sample_ids[:sample_length].tolist()
+            valid_label_ids = sample_labels[sample_labels != -100].tolist()
+            token_counts.update(valid_pred_ids)
+            predictions.append(processor.decode(valid_pred_ids))
+            references.append(
+                processor.decode(valid_label_ids, group_tokens=False)
+            )
+
+        blank_token_id = processor.tokenizer.pad_token_id
+        total_tokens = sum(token_counts.values())
+        blank_count = token_counts[blank_token_id]
+        character_lengths = [len(text) for text in predictions]
+        word_counts = [len(text.split()) for text in predictions]
+        return {
+            "wer": wer(references, predictions),
+            "empty_hypothesis_rate": (
+                sum(not text.strip() for text in predictions) / len(predictions)
+            ),
+            "blank_token_rate": (
+                blank_count / total_tokens if total_tokens else 0.0
+            ),
+            "nonblank_token_rate": (
+                (total_tokens - blank_count) / total_tokens
+                if total_tokens
+                else 0.0
+            ),
+            "average_hypothesis_character_length": (
+                sum(character_lengths) / len(character_lengths)
+            ),
+            "average_hypothesis_word_count": (
+                sum(word_counts) / len(word_counts)
+            ),
+        }
 
     return compute_metrics
 
@@ -272,6 +593,41 @@ class MyCtcTrainer(Trainer):
 
         return (loss, outputs) if return_outputs else loss
 
+    def prediction_step(
+        self,
+        model,
+        inputs,
+        prediction_loss_only,
+        ignore_keys=None,
+    ):
+        """Return valid logit lengths with logits for padding-safe diagnostics."""
+        attention_mask = inputs.get("attention_mask")
+        if attention_mask is None:
+            raw_input_lengths = torch.full(
+                (inputs["input_values"].shape[0],),
+                inputs["input_values"].shape[1],
+                dtype=torch.long,
+                device=inputs["input_values"].device,
+            )
+        else:
+            raw_input_lengths = attention_mask.sum(dim=-1).to(torch.long)
+        actual_model = model.module if hasattr(model, "module") else model
+        logit_lengths = actual_model._get_feat_extract_output_lengths(
+            raw_input_lengths
+        )
+        loss, logits, labels = super().prediction_step(
+            model,
+            inputs,
+            prediction_loss_only,
+            ignore_keys=ignore_keys,
+        )
+        if logits is None:
+            return loss, logits, labels
+        if isinstance(logits, (tuple, list)):
+            logits = logits[0]
+        logit_lengths = logit_lengths.to(logits.device)
+        return loss, (logits, logit_lengths.unsqueeze(-1)), labels
+
 
 def resolve_use_attention_mask_for_loss(processor, model, requested: Optional[bool]):
     """Resolve whether training forwards the collator attention mask to the model."""
@@ -304,8 +660,18 @@ def configure_spec_augment(model, apply_spec_augment: bool):
             wav2vec2_config.apply_spec_augment = apply_spec_augment
 
 
-def freeze_model_layers(model, freeze_feature_encoder: bool, freeze_n_layers: int):
+def freeze_model_layers(
+    model,
+    freeze_feature_encoder: bool,
+    freeze_wav2vec2: bool,
+    freeze_n_layers: int,
+):
     """Apply the requested feature encoder and transformer layer freezing."""
+    if freeze_wav2vec2:
+        for parameter in model.wav2vec2.parameters():
+            parameter.requires_grad = False
+        return
+
     if freeze_feature_encoder:
         if hasattr(model, "freeze_feature_encoder"):
             model.freeze_feature_encoder()
@@ -335,6 +701,10 @@ def validate_layerwise_args(args):
         raise ValueError(
             "--freeze_feature_encoder cannot be combined with "
             "--feature_extractor_learning_rate"
+        )
+    if args.freeze_wav2vec2 and args.layerwise_lr_decay:
+        raise ValueError(
+            "--freeze_wav2vec2 cannot be combined with --layerwise_lr_decay"
         )
     if not 0.0 < args.layerwise_lr_decay_rate <= 1.0:
         raise ValueError("--layerwise_lr_decay_rate must be in the interval (0, 1]")
@@ -426,9 +796,39 @@ def build_layerwise_optimizer(model, args) -> torch.optim.Optimizer:
     return torch.optim.AdamW(groups, lr=args.learning_rate, weight_decay=0.0)
 
 
+class DelayedEarlyStoppingCallback(EarlyStoppingCallback):
+    """Count patience only after a configured epoch."""
+
+    def __init__(
+        self,
+        early_stopping_patience: int,
+        early_stopping_threshold: float,
+        start_epoch: float,
+    ):
+        super().__init__(
+            early_stopping_patience=early_stopping_patience,
+            early_stopping_threshold=early_stopping_threshold,
+        )
+        self.start_epoch = start_epoch
+
+    def on_evaluate(self, args, state, control, metrics, **kwargs):
+        if state.epoch is None or state.epoch < self.start_epoch:
+            self.early_stopping_patience_counter = 0
+            return control
+        return super().on_evaluate(
+            args,
+            state,
+            control,
+            metrics,
+            **kwargs,
+        )
+
+
 def main():
     """Load data, train the model, and save a stable final model directory."""
     args = parse_args()
+    args.apply_spec_augment = resolve_spec_augment(args)
+    validate_strict_main_args(args)
     validate_layerwise_args(args)
     set_seed(args.seed)
 
@@ -436,14 +836,16 @@ def main():
         shard_sets = {"train": args.train_shards}
         if args.eval_shards is not None:
             shard_sets["eval"] = args.eval_shards
-        shard_sets["test-clean"] = args.test_clean_shards
-        shard_sets["test-other"] = args.test_other_shards
+        if args.experiment_role != "main":
+            shard_sets["test-clean"] = args.test_clean_shards
+            shard_sets["test-other"] = args.test_other_shards
         for split, shards in shard_sets.items():
             paths = sample_util.find_shards(shards)
             print(f"{split}: {len(paths)} shard(s)")
         print(
             "Dry run complete: "
             f"model={args.model_name_or_path}, output_dir={args.output_dir}, "
+            f"experiment_role={args.experiment_role}, "
             f"max_train_steps={args.max_train_steps}, "
             f"max_eval_samples={args.max_eval_samples}, "
             f"eval_shards={args.eval_shards or args.test_clean_shards}, "
@@ -455,7 +857,10 @@ def main():
         )
         return
 
-    processor = AutoProcessor.from_pretrained(args.model_name_or_path)
+    processor = AutoProcessor.from_pretrained(
+        args.model_name_or_path,
+        local_files_only=args.local_files_only,
+    )
     train_dataset = sample_util.make_dataset(
         args.train_shards, processor, shuffle=True
     )
@@ -470,23 +875,49 @@ def main():
         args.model_name_or_path,
         ctc_loss_reduction="mean",
         pad_token_id=processor.tokenizer.pad_token_id,
+        local_files_only=args.local_files_only,
     )
     if args.ctc_zero_infinity:
         model.config.ctc_zero_infinity = True
     configure_spec_augment(model, args.apply_spec_augment)
+    configure_spec_augment_parameters(model, args)
+    if args.blank_bias_init is not None:
+        if model.lm_head.bias is None:
+            raise ValueError("--blank_bias_init requires an lm_head bias.")
+        with torch.no_grad():
+            model.lm_head.bias[processor.tokenizer.pad_token_id] = (
+                args.blank_bias_init
+            )
+        print(
+            "Initialized CTC blank-token bias "
+            f"to {args.blank_bias_init:g}"
+        )
     use_attention_mask_for_loss = resolve_use_attention_mask_for_loss(
         processor, model, args.use_attention_mask_for_loss
     )
     print(f"model.config.apply_spec_augment={model.config.apply_spec_augment}")
+    print(f"experiment_role={args.experiment_role}")
     print(f"model.training={model.training}")
     print(f"loss_impl={args.loss_impl}")
     print(f"trainer_eval_shards={eval_shards}")
     print(f"use_attention_mask_for_loss={use_attention_mask_for_loss}")
     print(f"ctc_zero_infinity={getattr(model.config, 'ctc_zero_infinity', False)}")
-    freeze_model_layers(model, args.freeze_feature_encoder, args.freeze_n_layers)
+    freeze_model_layers(
+        model,
+        args.freeze_feature_encoder,
+        args.freeze_wav2vec2,
+        args.freeze_n_layers,
+    )
     optimizer: Optional[torch.optim.Optimizer] = None
     if args.layerwise_lr_decay:
         optimizer = build_layerwise_optimizer(model, args)
+    finite_loss_details = run_finite_loss_preflight(
+        model,
+        processor,
+        train_dataset,
+        args,
+        use_attention_mask_for_loss,
+    )
 
     bounded_run = args.max_train_steps > 0
     training_args = TrainingArguments(
@@ -499,20 +930,33 @@ def main():
         max_steps=args.max_train_steps,
         fp16=args.fp16,
         seed=args.seed,
+        warmup_ratio=args.warmup_ratio,
+        max_grad_norm=args.max_grad_norm,
         eval_strategy="steps" if bounded_run else "epoch",
+        eval_delay=args.eval_delay,
         save_strategy="steps" if bounded_run else "epoch",
         eval_steps=args.max_train_steps if bounded_run else None,
         save_steps=args.max_train_steps if bounded_run else 500,
         logging_strategy="steps",
-        logging_steps=10,
-        save_total_limit=2,
-        load_best_model_at_end=True,
+        logging_steps=args.logging_steps,
+        logging_first_step=True,
+        save_total_limit=args.save_total_limit,
+        load_best_model_at_end=args.load_best_model_at_end,
         metric_for_best_model="wer",
         greater_is_better=False,
         remove_unused_columns=False,
         report_to=[],
         push_to_hub=False,
     )
+    callbacks = []
+    if args.early_stopping_patience > 0:
+        callbacks.append(
+            DelayedEarlyStoppingCallback(
+                early_stopping_patience=args.early_stopping_patience,
+                early_stopping_threshold=args.early_stopping_threshold,
+                start_epoch=args.early_stopping_start_epoch,
+            )
+        )
     trainer = MyCtcTrainer(
         model=model,
         args=training_args,
@@ -526,12 +970,80 @@ def main():
         debug_first_batch=args.debug_first_batch,
         debug_processor=processor,
         use_attention_mask_for_loss=use_attention_mask_for_loss,
+        callbacks=callbacks,
     )
-    trainer.train()
+    started_at = time.time()
+    resume_from_checkpoint = args.resume_from_checkpoint
+    if resume_from_checkpoint == "latest":
+        resume_from_checkpoint = True
+    train_result = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    runtime_seconds = time.time() - started_at
 
-    final_model_dir = os.path.join(args.output_dir, "final_model")
+    final_model_dir = os.path.join(args.output_dir, args.final_model_subdir)
     trainer.save_model(final_model_dir)
     processor.save_pretrained(final_model_dir)
+    provenance = {
+        "experiment_role": args.experiment_role,
+        "main_source_checkpoint": (
+            ALLOWED_MAIN_SOURCE if args.experiment_role == "main" else None
+        ),
+        "model_name_or_path": args.model_name_or_path,
+        "train_shards": sample_util.find_shards(args.train_shards),
+        "eval_shards": sample_util.find_shards(eval_shards),
+        "test_splits_used_during_training": False,
+        "loss_impl": args.loss_impl,
+        "apply_spec_augment": args.apply_spec_augment,
+        "ctc_zero_infinity": args.ctc_zero_infinity,
+        "use_attention_mask_for_loss": use_attention_mask_for_loss,
+        "learning_rate": args.learning_rate,
+        "freeze_feature_encoder": args.freeze_feature_encoder,
+        "freeze_wav2vec2": args.freeze_wav2vec2,
+        "freeze_n_layers": args.freeze_n_layers,
+        "warmup_ratio": args.warmup_ratio,
+        "max_grad_norm": args.max_grad_norm,
+        "early_stopping_patience": args.early_stopping_patience,
+        "early_stopping_start_epoch": args.early_stopping_start_epoch,
+        "eval_delay": args.eval_delay,
+        "load_best_model_at_end": args.load_best_model_at_end,
+        "blank_bias_init": args.blank_bias_init,
+        "mask_time_prob": getattr(model.config, "mask_time_prob", None),
+        "mask_time_length": getattr(model.config, "mask_time_length", None),
+        "mask_time_min_masks": getattr(model.config, "mask_time_min_masks", None),
+        "seed": args.seed,
+    }
+    write_checkpoint_provenance(final_model_dir, provenance)
+
+    log_history = trainer.state.log_history
+    training_log_csv = args.training_log_csv or os.path.join(
+        args.output_dir, "training_log.csv"
+    )
+    validation_history_csv = args.validation_history_csv or os.path.join(
+        args.output_dir, "validation_wer_history.csv"
+    )
+    write_log_history_csv(log_history, training_log_csv)
+    write_validation_history_csv(log_history, validation_history_csv)
+
+    metadata = {
+        **provenance,
+        "output_dir": args.output_dir,
+        "saved_model_path": final_model_dir,
+        "best_checkpoint_path": trainer.state.best_model_checkpoint,
+        "best_metric": trainer.state.best_metric,
+        "global_step": trainer.state.global_step,
+        "epoch": trainer.state.epoch,
+        "runtime_seconds": runtime_seconds,
+        "train_metrics": train_result.metrics,
+        "finite_loss_check": finite_loss_details,
+        "training_log_csv": training_log_csv,
+        "validation_history_csv": validation_history_csv,
+    }
+    metadata_path = args.run_metadata_json or os.path.join(
+        args.output_dir, "run_metadata.json"
+    )
+    with open(metadata_path, "w", encoding="utf-8") as metadata_file:
+        json.dump(metadata, metadata_file, indent=2, sort_keys=True)
+        metadata_file.write("\n")
+    print(f"Saved run metadata: {metadata_path}")
 
 
 if __name__ == "__main__":

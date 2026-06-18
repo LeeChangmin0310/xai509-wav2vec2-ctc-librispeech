@@ -12,6 +12,8 @@ from torch.utils.data import DataLoader
 from transformers import AutoModelForCTC, AutoProcessor, set_seed
 
 import sample_util
+from experiment_guard import validate_checkpoint_role
+from text_normalization import normalize_transcript
 
 
 def parse_args():
@@ -19,8 +21,21 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test_clean_shards", default="data/test-clean")
     parser.add_argument("--test_other_shards", default="data/test-other")
+    parser.add_argument(
+        "--input_shards",
+        help="Optional single validation or evaluation shard specification.",
+    )
+    parser.add_argument(
+        "--result_file",
+        help="Output REF/HYP file used with --input_shards.",
+    )
     parser.add_argument("--model_name_or_path", required=True)
     parser.add_argument("--output_dir", required=True)
+    parser.add_argument(
+        "--experiment_role",
+        choices=("main", "positive_control_only", "diagnostic"),
+        default="main",
+    )
     parser.add_argument("--per_device_eval_batch_size", type=int, default=8)
     parser.add_argument(
         "--decoding_method",
@@ -29,13 +44,23 @@ def parse_args():
         help="CTC decoding strategy. Beam decoding requires pyctcdecode.",
     )
     parser.add_argument("--beam_width", type=int, default=100)
+    parser.add_argument("--language_model_path")
+    parser.add_argument("--alpha", type=float, default=0.5)
+    parser.add_argument("--beta", type=float, default=1.5)
     parser.add_argument(
         "--max_test_samples",
         type=int,
         help="Limit samples per test split for smoke tests.",
     )
     parser.add_argument("--fp16", action="store_true")
+    parser.add_argument(
+        "--no_attention_mask_for_forward",
+        action="store_true",
+        help="Omit the padding attention mask to match strict base evaluation.",
+    )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--normalize_text", action="store_true")
+    parser.add_argument("--local_files_only", action="store_true")
     parser.add_argument(
         "--dry_run",
         action="store_true",
@@ -60,10 +85,11 @@ def build_collate_fn(processor):
     return collate_fn
 
 
-def build_beam_decoder(processor):
-    """Build a pyctcdecode decoder without requiring an external LM."""
+def build_beam_decoder(processor, language_model_path=None, alpha=0.5, beta=1.5):
+    """Build a pyctcdecode decoder with an optional KenLM model."""
     try:
-        from pyctcdecode import build_ctcdecoder
+        from pyctcdecode import BeamSearchDecoderCTC, build_ctcdecoder
+        from pyctcdecode.alphabet import Alphabet
     except ImportError as error:
         raise RuntimeError(
             "Beam decoding requires pyctcdecode. Install it with: "
@@ -78,7 +104,21 @@ def build_beam_decoder(processor):
     delimiter = processor.tokenizer.word_delimiter_token
     if delimiter in vocab:
         labels[vocab[delimiter]] = " "
-    return build_ctcdecoder(labels=labels)
+    if language_model_path and language_model_path.endswith(".json"):
+        from simple_ngram_lm import SimpleWordNGramLanguageModel
+
+        language_model = SimpleWordNGramLanguageModel.load(language_model_path)
+        language_model.reset_params(alpha=alpha, beta=beta)
+        return BeamSearchDecoderCTC(
+            Alphabet.build_alphabet(labels),
+            language_model=language_model,
+        )
+    return build_ctcdecoder(
+        labels=labels,
+        kenlm_model_path=language_model_path,
+        alpha=alpha,
+        beta=beta,
+    )
 
 
 def decode_logits(logits, processor, decoding_method, decoder, beam_width):
@@ -100,6 +140,8 @@ def write_results(
     decoding_method,
     decoder=None,
     beam_width=100,
+    normalize_text=False,
+    no_attention_mask_for_forward=False,
 ):
     """Write REF/HYP pairs for one evaluation split."""
     loader = DataLoader(
@@ -111,6 +153,8 @@ def write_results(
     with open(output_file, "w", encoding="utf-8") as output:
         for batch in loader:
             references = batch.pop("references")
+            if no_attention_mask_for_forward:
+                batch.pop("attention_mask", None)
             batch = {key: value.to(device) for key, value in batch.items()}
             with torch.no_grad():
                 with torch.cuda.amp.autocast(enabled=use_fp16):
@@ -119,6 +163,9 @@ def write_results(
                 logits, processor, decoding_method, decoder, beam_width
             )
             for reference, hypothesis in zip(references, hypotheses):
+                if normalize_text:
+                    reference = normalize_transcript(reference)
+                    hypothesis = normalize_transcript(hypothesis)
                 output.write(f"REF: {reference}\n")
                 output.write(f"HYP: {hypothesis}\n\n")
 
@@ -128,48 +175,77 @@ def main():
     args = parse_args()
     if args.beam_width <= 0:
         raise ValueError("--beam_width must be greater than zero")
+    if bool(args.input_shards) != bool(args.result_file):
+        raise ValueError("--input_shards and --result_file must be provided together")
+    validate_checkpoint_role(args.model_name_or_path, args.experiment_role)
     set_seed(args.seed)
 
     if args.dry_run:
-        shard_sets = {
-            "test-clean": args.test_clean_shards,
-            "test-other": args.test_other_shards,
-        }
+        shard_sets = (
+            {"input": args.input_shards}
+            if args.input_shards
+            else {
+                "test-clean": args.test_clean_shards,
+                "test-other": args.test_other_shards,
+            }
+        )
         for split, shards in shard_sets.items():
             paths = sample_util.find_shards(shards)
             print(f"{split}: {len(paths)} shard(s)")
         print(
             "Dry run complete: "
             f"model={args.model_name_or_path}, output_dir={args.output_dir}, "
+            f"experiment_role={args.experiment_role}, "
             f"max_test_samples={args.max_test_samples}, "
             f"decoding_method={args.decoding_method}, beam_width={args.beam_width}"
         )
         return
 
     os.makedirs(args.output_dir, exist_ok=True)
-    processor = AutoProcessor.from_pretrained(args.model_name_or_path)
-    model = AutoModelForCTC.from_pretrained(args.model_name_or_path)
+    processor = AutoProcessor.from_pretrained(
+        args.model_name_or_path,
+        local_files_only=args.local_files_only,
+    )
+    model = AutoModelForCTC.from_pretrained(
+        args.model_name_or_path,
+        local_files_only=args.local_files_only,
+    )
     decoder: Optional[object] = None
     if args.decoding_method == "beam":
-        decoder = build_beam_decoder(processor)
+        decoder = build_beam_decoder(
+            processor,
+            language_model_path=args.language_model_path,
+            alpha=args.alpha,
+            beta=args.beta,
+        )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.eval()
 
-    datasets = {
-        "test_clean_result.txt": sample_util.make_dataset(
-            args.test_clean_shards,
-            processor,
-            do_tokenization=False,
-            max_samples=args.max_test_samples,
-        ),
-        "test_other_result.txt": sample_util.make_dataset(
-            args.test_other_shards,
-            processor,
-            do_tokenization=False,
-            max_samples=args.max_test_samples,
-        ),
-    }
+    if args.input_shards:
+        datasets = {
+            args.result_file: sample_util.make_dataset(
+                args.input_shards,
+                processor,
+                do_tokenization=False,
+                max_samples=args.max_test_samples,
+            )
+        }
+    else:
+        datasets = {
+            "test_clean_result.txt": sample_util.make_dataset(
+                args.test_clean_shards,
+                processor,
+                do_tokenization=False,
+                max_samples=args.max_test_samples,
+            ),
+            "test_other_result.txt": sample_util.make_dataset(
+                args.test_other_shards,
+                processor,
+                do_tokenization=False,
+                max_samples=args.max_test_samples,
+            ),
+        }
     for filename, dataset in datasets.items():
         write_results(
             dataset,
@@ -178,18 +254,31 @@ def main():
             device,
             args.per_device_eval_batch_size,
             args.fp16,
-            os.path.join(args.output_dir, filename),
+            (
+                filename
+                if os.path.isabs(filename)
+                else os.path.join(args.output_dir, filename)
+            ),
             args.decoding_method,
             decoder=decoder,
             beam_width=args.beam_width,
+            normalize_text=args.normalize_text,
+            no_attention_mask_for_forward=args.no_attention_mask_for_forward,
         )
 
     metadata = {
         "checkpoint_path": args.model_name_or_path,
+        "experiment_role": args.experiment_role,
         "decoding_method": args.decoding_method,
         "beam_width": args.beam_width if args.decoding_method == "beam" else "",
+        "language_model_path": args.language_model_path,
+        "alpha": args.alpha if args.decoding_method == "beam" else "",
+        "beta": args.beta if args.decoding_method == "beam" else "",
+        "input_shards": args.input_shards,
+        "normalize_text": args.normalize_text,
         "max_test_samples": args.max_test_samples,
         "fp16": args.fp16,
+        "attention_mask_passed": not args.no_attention_mask_for_forward,
         "seed": args.seed,
     }
     metadata_path = os.path.join(args.output_dir, "metadata.json")

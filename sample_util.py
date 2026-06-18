@@ -13,6 +13,8 @@ import torch
 import torchaudio
 import webdataset as wds
 
+from text_normalization import normalize_transcript
+
 
 ShardInput = Union[str, Iterable[str]]
 
@@ -113,7 +115,7 @@ def preprocess_sample(sample: Dict, processor, do_tokenization: bool = True) -> 
     text = sample["text"]
     if isinstance(text, bytes):
         text = text.decode("utf-8")
-    text = text.strip()
+    text = normalize_transcript(text)
 
     labels = processor.tokenizer(text).input_ids if do_tokenization else text
     return {"input_values": input_values, "labels": labels}

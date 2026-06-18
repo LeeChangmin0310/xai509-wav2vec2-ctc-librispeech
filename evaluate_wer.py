@@ -8,6 +8,8 @@ from typing import Dict, List, Optional, Tuple
 
 from jiwer import wer
 
+from text_normalization import normalize_transcript
+
 
 SUMMARY_FIELDS = [
     "experiment",
@@ -37,6 +39,7 @@ def parse_args():
     parser.add_argument("--layerwise_lr_decay")
     parser.add_argument("--beam_width")
     parser.add_argument("--checkpoint_path")
+    parser.add_argument("--normalize_text", action="store_true")
     return parser.parse_args()
 
 
@@ -117,6 +120,9 @@ def main():
     scores = {}
     for result_file in args.result_files:
         references, hypotheses = read_ref_hyp_pairs(result_file)
+        if args.normalize_text:
+            references = [normalize_transcript(text) for text in references]
+            hypotheses = [normalize_transcript(text) for text in hypotheses]
         split = split_name(result_file)
         scores[split] = wer(references, hypotheses)
         print(f"{split} WER: {scores[split]:.4f}")

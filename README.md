@@ -293,6 +293,17 @@ python scripts/check_predictions_nonempty.py \
   results/asrinit_lr1e-5_fp32_properval/test_clean_result.txt
 ```
 
+Measure blank-token and greedy-decoding behavior on a train-shard validation
+fold without touching either final test split:
+
+```bash
+GPU_ID=6 CANDIDATE=A FOLD=0 CHECKPOINTS="145 232" \
+  CONDA_ENV=xai509_sr bash scripts/run_base_strict_blank_diagnostics.sh
+```
+
+Omit `CHECKPOINTS` to diagnose every retained checkpoint for a completed
+candidate/fold, including future B/C fold-0 runs.
+
 Create a source/report submission snapshot:
 
 ```bash

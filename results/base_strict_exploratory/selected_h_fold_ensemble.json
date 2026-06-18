@@ -1,0 +1,23 @@
+{
+  "alpha": 0.3,
+  "attention_mask_passed": false,
+  "beam_width": 50,
+  "beta": 1.5,
+  "decoder_config_source": "results/base_strict_final/selected_decoder_config.json",
+  "language_model_path": "/home/user/disk4/LCM/assignments/SR/results/base_strict_final/train_text_trigram_lm.json",
+  "method": "rover",
+  "method_type": "ensemble_candidate",
+  "model_count": 5,
+  "model_paths": [
+    "outputs/base_strict_cv/two_stage_head_warmup/fold_0/best_model",
+    "outputs/base_strict_cv/two_stage_head_warmup/fold_1/best_model",
+    "outputs/base_strict_cv/two_stage_head_warmup/fold_2/best_model",
+    "outputs/base_strict_cv/two_stage_head_warmup/fold_3/best_model",
+    "outputs/base_strict_cv/two_stage_head_warmup/fold_4/best_model"
+  ],
+  "selection_source": "validation_shard_000004_only",
+  "test_splits_used_for_selection": false,
+  "validation_leakage_caveat": "H folds 0-3 included shard 000004 in acoustic training; only fold 4 held it out. Ensemble validation is therefore optimistic.",
+  "validation_shards": "/home/user/disk4/LCM/assignments/SR/data/train/shard-000004.tar",
+  "validation_wer": 0.0
+}

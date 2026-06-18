@@ -2,19 +2,13 @@
 
 ## Project goal
 
-This XAI509 Automatic Speech Recognition semester project investigates how to
-adapt the self-supervised `facebook/wav2vec2-base` encoder to a small,
-course-provided LibriSpeech WebDataset. The implementation covers WebDataset
-loading, transcript normalization, Wav2Vec2-CTC fine-tuning, validation-based
-checkpoint and decoder selection, language-model-assisted decoding, and WER
-evaluation.
+This semester project adapts `facebook/wav2vec2-base` to the
+course-provided LibriSpeech WebDataset using a CTC objective. The implementation
+covers WebDataset loading, transcript normalization, Wav2Vec2-CTC fine-tuning,
+validation-based acoustic and decoder selection, train-text language-model
+fusion, and WER evaluation on `test-clean` and `test-other`.
 
-The central experimental question was not simply whether Wav2Vec2 could fit the
-data, but how to train a newly initialized CTC output head without relying on a
-supervised LibriSpeech ASR checkpoint. The final main result therefore uses the
-unsupervised base checkpoint and a reproducible validation protocol.
-
-## Dataset and data split protocol
+## Dataset and split protocol
 
 The provided data contains five training archives and separate test splits:
 
@@ -24,79 +18,67 @@ data/test-clean/*.tar
 data/test-other/*.tar
 ```
 
-The five train shards served two related purposes:
+Five-fold acoustic comparison holds out one train shard per fold and trains on
+the other four. For the final main run, shards `000000`–`000003` provide the
+acoustic and language-model training data, while shard `000004` is reserved for
+checkpoint selection and decoder tuning. The two test splits are decoded only
+after the acoustic model and decoder have been selected.
 
-- During acoustic model comparison, five-fold cross-validation held out one
-  train shard per fold and trained on the other four.
-- For the final main run, shards `000000`–`000003` were the acoustic and
-  language-model training data. Shard `000004` was the only validation shard
-  used for checkpoint selection and decoder tuning.
+## Model initialization
 
-The `test-clean` and `test-other` archives were excluded from training,
-checkpoint selection, and decoder tuning. They were decoded only after the
-main acoustic model and decoder configuration had been selected.
+All main experiments initialize from `facebook/wav2vec2-base`. The CTC output
+layer is initialized for the project tokenizer and trained on the provided
+transcripts. This keeps the acoustic adaptation process centered on the
+self-supervised Wav2Vec2 representation rather than an existing ASR output
+head. Model provenance is recorded by the code for reproducibility.
 
-## Checkpoint provenance policy
-
-Main experiments use `facebook/wav2vec2-base`, which is a self-supervised
-acoustic representation model rather than a LibriSpeech ASR-fine-tuned model.
-The following checkpoint names are banned from main results:
-
-- `facebook/wav2vec2-base-960h`
-- paths containing `asrinit`
-- paths containing `asr_pretrained`
-
-No supervised LibriSpeech ASR-fine-tuned checkpoint is used in the reported
-main or exploratory results. Saved main checkpoints include
-`checkpoint_provenance.json`, and `src/guard.py` verifies both the source
-checkpoint and experiment role before main evaluation. This prevents an
-accidental supervised checkpoint from entering the main pipeline under a local
-directory name.
-
-## Wav2Vec2-base + CTC pipeline
+## Wav2Vec2-CTC pipeline
 
 Audio and transcripts are read directly from tar-based WebDataset shards.
-Waveforms are converted to mono when necessary and passed through the
-Wav2Vec2 feature extractor. Transcripts are uppercased and normalized to the
-CTC tokenizer alphabet.
+Waveforms are converted to mono when necessary and processed by the Wav2Vec2
+feature extractor. Transcripts are uppercased and normalized to the tokenizer
+alphabet.
 
-`AutoModelForCTC` supplies a CTC projection layer above the Wav2Vec2 encoder.
-Training uses Hugging Face model loss for the main experiments, CTC
-`zero_infinity`, dynamic batch padding, finite-loss preflight checks, gradient
-clipping, and WER-based validation. Each exported model includes the processor
-and provenance metadata needed for evaluation.
+`AutoModelForCTC` adds a CTC projection layer above the Wav2Vec2 encoder. Main
+training uses Hugging Face model loss, CTC `zero_infinity`, dynamic padding,
+finite-loss preflight checks, gradient clipping, weak SpecAugment, and
+WER-based validation. Inference supports greedy decoding and CTC beam search.
+WER is computed from normalized reference/hypothesis pairs.
 
-Inference supports greedy decoding and CTC beam search. WER is computed from
-normalized reference/hypothesis pairs. Raw checkpoints and predictions are
-generated under ignored output directories; only compact result summaries are
-kept in Git.
+## Staged CTC Fine-tuning
 
-## Initial failures and blank collapse
+The selected acoustic method is **Staged CTC Fine-tuning** (internal ID: H).
+Its two stages separate adaptation of the newly initialized classification
+layer from broader acoustic fine-tuning:
 
-`facebook/wav2vec2-base` has no supervised ASR CTC head. When loaded for CTC,
-the output projection is randomly initialized, so the early optimization
-problem is substantially harder than fine-tuning an existing ASR model.
+1. Freeze the Wav2Vec2 backbone and train the CTC head for 10 epochs at
+   learning rate `1e-3`.
+2. Initialize from the warmed-up model, freeze the convolutional feature
+   extractor, and fine-tune the Transformer encoder at learning rate `1e-4`
+   with a `1e-3` head learning rate.
 
-The initial lower-learning-rate configurations A, B, and C all collapsed to
-the CTC blank token. Fold-0 diagnostics showed validation WER `1.0`, empty
-hypotheses for every sample, a blank-token rate of `1.0`, and a nonblank-token
-rate of `0.0`. Increasing training time at those settings did not fix the
-underlying optimization behavior.
+The second stage uses validation WER for checkpoint selection in the main
+experiment. Warming up the head first makes useful nonblank alignments more
+likely before encoder parameters begin moving.
 
-This failure prompted targeted diagnostics of logits, labels, input lengths,
-loss finiteness, and augmentation behavior. The solution was not to switch to
-`facebook/wav2vec2-base-960h`; doing so would have introduced a supervised ASR
-checkpoint and invalidated the intended base-only comparison.
+## Initial blank-collapse diagnosis
 
-## SpecAugment diagnosis
+`facebook/wav2vec2-base` does not provide a CTC classification layer trained
+for the project vocabulary. Initial learning-rate sweep therefore
+started with a random CTC head and converged to blank-dominant outputs.
 
-The diagnostic runs isolated a second instability in the small-data,
-random-head setting. Default SpecAugment was too aggressive and could produce
-non-finite behavior or blank collapse during train-mode forward passes, even
-when evaluation-mode inference was healthy.
+Fold-0 diagnostics for the early variants showed validation WER around `1.0`,
+empty hypotheses for every sample, a blank-token rate of `1.0`, and a
+nonblank-token rate of `0.0`. These results motivated direct inspection of
+logits, labels, CTC lengths, loss finiteness, and train/evaluation mode rather
+than treating the failure as a decoding problem.
 
-Completely removing augmentation was useful diagnostically, but the selected
-training policy retained a weaker form of SpecAugment:
+## SpecAugment and stability diagnosis
+
+Default SpecAugment was too aggressive for the small-data, random-head setting
+and could trigger non-finite behavior or blank collapse in train mode. Turning
+augmentation off helped isolate the cause, after which a weaker configuration
+was introduced:
 
 ```text
 mask_time_prob = 0.01
@@ -104,55 +86,49 @@ mask_time_length = 5
 min_masks = 1
 ```
 
-This setting passed the finite-loss preflight and avoided the collapse observed
-with the default masking configuration. It was used for the stable F and H
-acoustic configurations.
+This setting passed the finite-loss preflight and retained modest acoustic
+augmentation without recreating the original instability. It was used for the
+stable acoustic configurations.
 
-## Training configurations tried
+## Training configurations
 
-| ID / setting | Main idea | Outcome |
+| Configuration | Main idea | Outcome |
 | --- | --- | --- |
-| A/B/C | Early base-only, lower-LR variants with a randomly initialized CTC head | Blank collapse; validation WER around 1.0 |
-| F / `lr2e-4_freeze_feature` | Freeze the feature encoder and train with LR `2e-4` plus weak SpecAugment | Stable; five-fold mean WER 0.246672 |
-| H / `two_stage_head_warmup` | 10 head-only epochs, then encoder fine-tuning with weak SpecAugment | Stable; five-fold mean WER 0.225792; selected |
-| H2 | Post-final head-refinement diagnostic | Validation WER 0.216123; diagnostic only |
-| H3 | Alternative post-final head-refinement diagnostic | Validation WER 0.239367; diagnostic only |
-| H all-train | Fixed H schedule using all five train shards | test-clean 0.216867; test-other 0.303307; exploratory |
-| H-fold ROVER | Word-alignment voting across five H fold models | test-clean 0.197314; test-other 0.271383; best observed exploratory |
+| Early base-only LR variants | Lower-LR fine-tuning with a randomly initialized CTC head | Blank collapse; validation WER around 1.0 |
+| Frozen-feature LR-2e-4 Baseline (internal ID: F) | Freeze the feature encoder and train at LR `2e-4` with weak SpecAugment | Stable; five-fold mean WER 0.246672 |
+| Staged CTC Fine-tuning (internal ID: H) | Warm up the CTC head, then fine-tune the encoder | Stable; five-fold mean WER 0.225792; selected |
+| Staged CTC refinement run 1 | Post-hoc refinement experiment | Validation WER 0.216123; diagnostic only |
+| Staged CTC refinement run 2 | Alternative post-final refinement diagnostic | Validation WER 0.239367; diagnostic only |
+| Staged CTC All-Train Model | Apply the fixed staged schedule to all five train shards | test-clean 0.216867; test-other 0.303307; exploratory |
+| Staged CTC Fold Ensemble with ROVER Voting | Word-alignment voting across five staged fine-tuning fold models | test-clean 0.197314; test-other 0.271383; best observed exploratory |
 
-Configuration H uses two stages. Stage 1 freezes the Wav2Vec2 backbone and
-trains the CTC head for 10 epochs at learning rate `1e-3`. Stage 2 starts from
-that checkpoint, freezes the convolutional feature encoder, and trains the
-Transformer encoder at learning rate `1e-4` with a `1e-3` head learning rate.
-Validation WER controls checkpoint selection during the main run.
+## Acoustic model comparison
 
-## H/F 5-fold acoustic CV
+Staged CTC Fine-tuning and the Frozen-feature LR-2e-4 Baseline were compared on
+the same five train-shard folds.
 
-The two stable candidates were compared on the same five folds.
-
-| Fold | H WER | F WER | Winner |
-| ---: | ---: | ---: | --- |
-| 0 | 0.216511 | 0.239875 | H |
-| 1 | 0.227251 | 0.263260 | H |
-| 2 | 0.208054 | 0.219080 | H |
-| 3 | 0.244208 | 0.269305 | H |
-| 4 | 0.232938 | 0.241840 | H |
+| Fold | Staged CTC Fine-tuning WER | Frozen-feature baseline WER |
+| ---: | ---: | ---: |
+| 0 | 0.216511 | 0.239875 |
+| 1 | 0.227251 | 0.263260 |
+| 2 | 0.208054 | 0.219080 |
+| 3 | 0.244208 | 0.269305 |
+| 4 | 0.232938 | 0.241840 |
 
 | Configuration | Mean WER | Standard deviation | Paired-fold wins |
 | --- | ---: | ---: | ---: |
-| H / `two_stage_head_warmup` | 0.225792 | 0.012595 | 5 / 5 |
-| F / `lr2e-4_freeze_feature` | 0.246672 | 0.017991 | 0 / 5 |
+| Staged CTC Fine-tuning | 0.225792 | 0.012595 | 5 / 5 |
+| Frozen-feature LR-2e-4 Baseline | 0.246672 | 0.017991 | 0 / 5 |
 
-H had both the lower mean WER and lower fold-to-fold variation, and it won all
-five direct paired comparisons. It was therefore selected as the main acoustic
-training recipe.
+The staged method achieved lower WER on every paired fold, as well as a lower
+mean and standard deviation, so it was selected for the main model.
 
 ## Decoder tuning and train-text trigram LM fusion
 
-Decoder selection used only validation shard `000004`. The language model was
-a small word trigram model trained solely from transcripts in training shards
-`000000`–`000003`; no official LibriSpeech language model or pretrained neural
-language model was used.
+Decoder selection used only validation shard `000004`. A small word trigram
+model was trained solely from transcripts in training shards
+`000000`–`000003`; no external text corpus or pretrained neural language model
+was used.
 
 | Decoder | Beam width | Alpha | Beta | Validation WER |
 | --- | ---: | ---: | ---: | ---: |
@@ -160,58 +136,47 @@ language model was used.
 | Beam | 50 | — | — | 0.232938 |
 | Beam + train-text trigram LM | 50 | 0.3 | 1.5 | 0.228487 |
 
-Plain beam search did not improve over greedy decoding. Shallow fusion with the
-train-text trigram LM produced a modest but consistent validation improvement,
-so beam width 50, alpha 0.3, and beta 1.5 were frozen before test decoding.
+Plain beam search matched greedy decoding. Shallow fusion with the train-text
+trigram model improved validation WER, so beam width 50, alpha 0.3, and beta
+1.5 were frozen before test decoding.
 
-## Final main result
-
-The main result is the validation-selected H single model decoded with the
-selected train-text trigram LM configuration.
+## Main result
 
 | Setting | Role | Validation WER | test-clean WER | test-other WER |
 | --- | --- | ---: | ---: | ---: |
-| H single model + beam LM | Main reproducible result | 0.228487 | 0.246386 | 0.329289 |
+| Staged CTC fine-tuned Wav2Vec2 + beam/trigram LM | Main reproducible result | 0.228487 | 0.246386 | 0.329289 |
 
-This is the clean result to use when describing the project’s primary
-performance: its acoustic checkpoint and decoder were selected without using
-the test splits.
+This is the primary project result. Both the acoustic checkpoint and decoder
+were selected without using the test splits.
 
-## Post-final exploratory improvements
+## Exploratory improvements
 
-Two experiments were run after the main protocol had been completed.
+| Setting | Role | Validation WER | test-clean WER | test-other WER |
+| --- | --- | ---: | ---: | ---: |
+| Staged CTC All-Train Model | Exploratory all-train | — | 0.216867 | 0.303307 |
+| Staged CTC Fold Ensemble with ROVER Voting | Best observed exploratory | — | 0.197314 | 0.271383 |
 
-| Setting | Role | test-clean WER | test-other WER |
-| --- | --- | ---: | ---: |
-| H all-train | Exploratory all-train | 0.216867 | 0.303307 |
-| H-fold ROVER ensemble | Best observed exploratory | 0.197314 | 0.271383 |
+The all-train model applies the fixed staged schedule to all five train shards
+and retains the final epoch, so it has no untouched in-domain validation split.
 
-The H all-train model used the fixed H schedule on all five train shards and
-kept the final epoch. It improved both test splits, but it has no untouched
-in-domain validation set.
-
-The ROVER system combined the five H fold hypotheses using deterministic
-progressive word alignment and voting. It achieved the best observed test WER,
-but it must remain an exploratory result. Folds 0–3 had trained on shard
-`000004`, while only fold 4 held that shard out. Consequently, the validation
-selection used for the ensemble is affected by fold-membership leakage and is
-not an unbiased held-out estimate. ROVER must not be presented as the clean
-main validation-selected model.
+The ROVER system combines fold hypotheses using deterministic progressive word
+alignment and voting. It gives the best observed test WER, but it is reported
+as exploratory because folds 0–3 trained on shard `000004`; validation
+selection is therefore affected by fold-membership leakage. It is not the
+clean validation-selected main model.
 
 ## Interpretation and limitations
 
-The experiments show that the main difficulty was optimization of a random CTC
-head on limited data, not merely decoding. Conservative augmentation and a
-head-warmup stage materially improved stability, and H’s five-fold advantage
-over F suggests that the gain was robust across the available train shards.
-The train-text trigram LM provided a smaller improvement than the acoustic
-training changes, but it improved the selected validation model without using
-external text.
+The experiments indicate that stable optimization of the newly initialized CTC
+head was the central challenge. Weak augmentation and staged optimization
+produced a robust improvement over the frozen-feature baseline across all five
+folds. Train-text trigram fusion contributed a smaller additional gain without
+using external text.
 
-The main limitations are the small acoustic dataset, sensitivity to
-augmentation and training schedule, and the absence of an untouched validation
-split for the all-train experiment. The exploratory test results were produced
-after the main test had already been observed and should therefore be
-interpreted cautiously. Most importantly, the ROVER validation result is
-leaked by fold membership; its lower test WER is an interesting upper-bound
-observation, not a replacement for the reproducible main result.
+Limitations include the small acoustic dataset, sensitivity to augmentation
+and schedule choices, and the absence of an untouched validation split for the
+all-train model. Exploratory test comparisons were also conducted after the
+main test result was known. Finally, the ensemble’s validation selection is
+leaked by fold membership, so its lower test WER should be interpreted as an
+exploratory upper-bound observation rather than a replacement for the main
+result.

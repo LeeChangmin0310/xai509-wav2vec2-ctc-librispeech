@@ -1,0 +1,3 @@
+split,selected_method,wer,main_final_wer,absolute_wer_change_vs_main,improved_over_main,beam_width,alpha,beta,model_count,prediction_path
+test-clean,rover,0.1973143639683506,0.24638618381010347,-0.04907181984175288,True,50,0.3,1.5,5,/home/user/disk4/LCM/assignments/SR/results/base_strict_exploratory/h_fold_ensemble_test_clean_predictions.txt
+test-other,rover,0.27138299295034674,0.3292894942972317,-0.057906501346884964,True,50,0.3,1.5,5,/home/user/disk4/LCM/assignments/SR/results/base_strict_exploratory/h_fold_ensemble_test_other_predictions.txt

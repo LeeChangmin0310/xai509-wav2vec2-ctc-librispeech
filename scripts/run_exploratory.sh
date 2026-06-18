@@ -116,7 +116,7 @@ run_split "$ROOT/data/test-other" "$PREDICTION_DIR/test_other_predictions.txt"
   --summary_csv "$ROOT/results/exploratory_summary.csv" \
   --experiment_name h_alltrain \
   --acoustic_config "H all-train" \
-  --decoder "frozen strict beam + train-text trigram LM" \
-  --notes "All five train shards; fixed final epoch; no untouched validation split"
+  --decoder "frozen main beam + train-text trigram LM" \
+  --notes "Exploratory all-train run with fixed final epoch and no untouched validation split"
 
 echo "ROVER remains report-only because folds 0-3 trained on shard 000004."

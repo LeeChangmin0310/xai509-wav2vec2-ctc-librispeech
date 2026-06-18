@@ -1,39 +1,48 @@
-# Strict Wav2Vec2-base ASR
+# XAI509 Automatic Speech Recognition Semester Project
 
-This repository fine-tunes the unsupervised `facebook/wav2vec2-base` checkpoint
-for LibriSpeech-style CTC recognition. The final submission keeps only the
-reproducible training/evaluation code, compact result summaries, and reports.
+**Wav2Vec2-CTC Fine-tuning on the Provided LibriSpeech WebDataset**
 
-## Strict checkpoint protocol
+## Overview
 
-- Main runs initialize from `facebook/wav2vec2-base`.
-- Training uses `data/train/shard-000000.tar` through
-  `data/train/shard-000003.tar`.
-- `data/train/shard-000004.tar` is reserved for acoustic checkpoint selection
-  and decoder tuning.
-- `test-clean` and `test-other` are evaluated only after the acoustic checkpoint
-  and decoder are frozen.
-- The selected H recipe trains the CTC head for 10 epochs, then trains the
-  encoder for up to 40 epochs with weak SpecAugment and validation-based early
-  stopping.
-- Every saved main checkpoint includes `checkpoint_provenance.json`.
-  `src/guard.py` rejects main evaluation of local checkpoints without matching
-  provenance.
-- `facebook/wav2vec2-base-960h` and other supervised LibriSpeech ASR
-  checkpoints are not used for main training or evaluation.
+This repository contains the final semester project for the **XAI509 Automatic
+Speech Recognition** course. It implements an end-to-end experimental pipeline
+for fine-tuning Wav2Vec2 with CTC, decoding speech, and evaluating word error
+rate (WER) on the provided LibriSpeech WebDataset shards.
 
-## Setup
+The main model starts from `facebook/wav2vec2-base`. The supervised
+`facebook/wav2vec2-base-960h` checkpoint is not used for the main results, and
+the code records and validates checkpoint provenance to enforce that policy.
+
+## Repository structure
+
+```text
+README.md                    Project overview and reproduction guide
+requirements.txt             Python dependencies
+src/                         Training, inference, WER, data, LM, and guard code
+scripts/                     Reproducible shell entrypoints
+data/README.md               Expected local WebDataset layout
+results/                     Compact final CSV and JSON artifacts
+reports/                     Concise final and exploratory reports
+docs/EXPERIMENT_SUMMARY.md   Full experimental process and interpretation
+```
+
+Generated checkpoints, predictions, decoder sweeps, logs, and dataset archives
+are intentionally excluded from Git.
+
+## Installation
+
+Python 3.10 and a CUDA-capable PyTorch environment are recommended.
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-GPU selection is controlled with `GPU_ID`, and `PYTHON` can override the Python
-executable. Set `LOCAL_FILES_ONLY=1` to require an already cached base model.
+Set `PYTHON` to choose another Python executable, `GPU_ID` to select a GPU, and
+`LOCAL_FILES_ONLY=1` to require locally cached Hugging Face files.
 
 ## Data layout
 
-Dataset archives are local-only and ignored by Git:
+Place the provided WebDataset archives at:
 
 ```text
 data/
@@ -49,64 +58,64 @@ data/
     *.tar
 ```
 
-See `data/README.md` for details.
+The main data split protocol trains on shards `000000`–`000003` and reserves
+shard `000004` for checkpoint selection and decoder tuning. `test-clean` and
+`test-other` are used only for final evaluation. See
+[data/README.md](data/README.md) for the local-data contract.
 
-## Training
+## Quick start
+
+Run the main pipeline in order:
 
 ```bash
 GPU_ID=0 bash scripts/run_train.sh
-```
-
-This reproduces H / `two_stage_head_warmup` and writes generated checkpoints
-under ignored `outputs/strict_final/`.
-
-## Validation decoding
-
-```bash
 GPU_ID=0 bash scripts/run_validation_decode.sh
-```
-
-The script trains a trigram LM from train-shard transcripts only, sweeps decoder
-settings on shard `000004`, and updates
-`results/selected_decoder_config.json`.
-
-## Final test evaluation
-
-```bash
 GPU_ID=0 bash scripts/run_test_eval.sh
 ```
 
-Raw predictions remain under ignored `outputs/`; the compact WER row is written
-to `results/strict_final_summary.csv`.
-
-## Strict final result
-
-| Acoustic configuration | Decoder | Validation WER | test-clean WER | test-other WER |
-| --- | --- | ---: | ---: | ---: |
-| H / `two_stage_head_warmup` | beam + train-text trigram LM | 0.228487 | 0.246386 | 0.329289 |
-
-## Exploratory results
+Run the optional all-train experiment with:
 
 ```bash
 GPU_ID=0 bash scripts/run_exploratory.sh
 ```
 
-| Experiment | test-clean WER | test-other WER | Interpretation |
-| --- | ---: | ---: | --- |
-| H all-train | 0.216867 | 0.303307 | Fixed H recipe on all five train shards |
-| H-fold ROVER ensemble | 0.197314 | 0.271383 | Best observed exploratory result; report only |
+## Main pipeline
 
-The ROVER ensemble has validation leakage: folds 0–3 trained on shard `000004`,
-so its ensemble selection was not based on an unbiased held-out validation set.
-It is therefore reported only as the best observed exploratory result and does
-not replace the strict final result.
+1. `run_train.sh` reproduces configuration H: a 10-epoch CTC-head warmup
+   followed by encoder fine-tuning with weak SpecAugment.
+2. `run_validation_decode.sh` trains a word trigram LM only from the main
+   training transcripts and selects decoder settings on shard `000004`.
+3. `run_test_eval.sh` freezes that selection, evaluates `test-clean` and
+   `test-other`, and writes the compact WER summary.
 
-## Repository layout
+Main experiments initialize from `facebook/wav2vec2-base`. Checkpoints marked
+as `960h`, `asrinit`, or `asr_pretrained` are rejected from main evaluation by
+the checkpoint policy in `src/guard.py`.
 
-```text
-src/       training, inference, evaluation, guards, LM, and data utilities
-scripts/   four reproducible shell entrypoints
-data/      local dataset instructions only
-results/   compact CSV/JSON artifacts only
-reports/   strict and exploratory reports
-```
+## Key results
+
+| Setting | Role | Validation WER | test-clean WER | test-other WER |
+| --- | --- | ---: | ---: | ---: |
+| H single model + beam LM | Main reproducible result | 0.228487 | 0.246386 | 0.329289 |
+| H all-train | Exploratory all-train | — | 0.216867 | 0.303307 |
+| H-fold ROVER ensemble | Best observed exploratory | — | 0.197314 | 0.271383 |
+
+The selected main decoder uses beam width 50 with the train-text trigram LM,
+alpha 0.3, and beta 1.5.
+
+## Exploratory results
+
+The H all-train model applies the fixed H recipe to all five train shards and
+retains the final epoch without validation-based checkpoint selection.
+
+The H-fold ROVER ensemble achieved the best observed test WER, but it is
+reported separately as exploratory because its validation selection is
+affected by fold-membership leakage: folds 0–3 trained on shard `000004`.
+ROVER is therefore not presented as the clean main validation-selected model.
+
+## Detailed experiment summary
+
+The complete experimental narrative—including blank-collapse failures,
+SpecAugment diagnosis, H/F cross-validation, decoder tuning, final results, and
+limitations—is in
+[docs/EXPERIMENT_SUMMARY.md](docs/EXPERIMENT_SUMMARY.md).

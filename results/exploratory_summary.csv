@@ -1,3 +1,3 @@
 experiment,acoustic_config,decoder,validation_wer,test_clean_wer,test_other_wer,notes
-h_alltrain,H all-train,frozen strict beam + train-text trigram LM,,0.216867,0.303307,All five train shards; fixed final epoch; no untouched validation split
-h_fold_rover,H-fold ROVER ensemble,frozen strict beam + train-text trigram LM,0.000000,0.197314,0.271383,Report only: folds 0-3 trained on validation shard 000004
+h_alltrain,H all-train,frozen main beam + train-text trigram LM,,0.216867,0.303307,Exploratory all-train run with fixed final epoch and no untouched validation split
+h_fold_rover,H-fold ROVER ensemble,frozen main beam + train-text trigram LM,,0.197314,0.271383,Best observed exploratory result; validation selection has fold-membership leakage because folds 0-3 trained on shard 000004

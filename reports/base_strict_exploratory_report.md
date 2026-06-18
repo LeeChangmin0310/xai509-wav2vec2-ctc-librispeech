@@ -1,7 +1,7 @@
-# Strict Wav2Vec2-base Exploratory Report
+# Post-final Wav2Vec2-base Exploratory Results
 
-These post-final experiments do not replace the strict final result. They use
-the same unsupervised `facebook/wav2vec2-base` source and the frozen strict
+These post-final experiments do not replace the main reproducible result. They
+use the same unsupervised `facebook/wav2vec2-base` source and the frozen main
 decoder; no supervised LibriSpeech ASR checkpoint is used.
 
 ## H all-train

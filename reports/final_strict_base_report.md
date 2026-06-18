@@ -1,6 +1,6 @@
-# Final Strict Wav2Vec2-base ASR Report
+# Main Wav2Vec2-base ASR Result
 
-## Protocol
+## Checkpoint policy and data protocol
 
 - Initialization: `facebook/wav2vec2-base`.
 - Acoustic training: train shards `000000`–`000003`.
@@ -11,7 +11,7 @@
 - Checkpoint provenance is written by `src/train.py` and enforced by
   `src/guard.py`.
 
-## Selected system
+## Main selected system
 
 The selected acoustic configuration was H / `two_stage_head_warmup`: 10
 head-only epochs followed by encoder training with weak SpecAugment

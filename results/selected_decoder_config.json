@@ -6,6 +6,7 @@
   "beta": 1.5,
   "decoding_method": "beam_lm",
   "language_model_path": "outputs/strict_final/train_text_trigram_lm.json",
+  "role": "main_validation_selected_decoder",
   "selection_source": "validation_only",
   "test_splits_used_for_selection": false,
   "validation_shards": "data/train/shard-000004.tar",

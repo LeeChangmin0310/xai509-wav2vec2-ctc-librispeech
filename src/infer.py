@@ -259,6 +259,7 @@ def tune_decoder(args) -> None:
     best.update(
         {
             "acoustic_checkpoint": args.model_name_or_path,
+            "role": "main_validation_selected_decoder",
             "validation_shards": args.validation_shards,
             "selection_source": "validation_only",
             "test_splits_used_for_selection": False,

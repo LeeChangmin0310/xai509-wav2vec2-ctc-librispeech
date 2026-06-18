@@ -1,2 +1,2 @@
 experiment,acoustic_config,decoder,validation_wer,test_clean_wer,test_other_wer,notes
-strict_final,H / two_stage_head_warmup,beam + train-text trigram LM,0.228487,0.246386,0.329289,Validation-only checkpoint and decoder selection
+main_h_single,H / two_stage_head_warmup,beam + train-text trigram LM,0.228487,0.246386,0.329289,Main reproducible result selected using train shard 000004 only

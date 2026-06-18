@@ -67,8 +67,8 @@ run_split "$ROOT/data/test-other" "$PREDICTION_DIR/test_other_predictions.txt"
   "$PREDICTION_DIR/test_other_predictions.txt" \
   --normalize_text \
   --summary_csv "$ROOT/results/strict_final_summary.csv" \
-  --experiment_name strict_final \
+  --experiment_name main_h_single \
   --acoustic_config "H / two_stage_head_warmup" \
   --decoder "beam + train-text trigram LM" \
   --validation_wer "$VALIDATION_WER" \
-  --notes "Validation-only checkpoint and decoder selection"
+  --notes "Main reproducible result selected using train shard 000004 only"

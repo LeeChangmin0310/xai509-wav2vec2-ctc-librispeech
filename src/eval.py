@@ -12,7 +12,8 @@ from .normalization import normalize_transcript
 
 SUMMARY_FIELDS = [
     "experiment",
-    "acoustic_config",
+    "setting",
+    "internal_id",
     "decoder",
     "validation_wer",
     "test_clean_wer",
@@ -27,7 +28,8 @@ def parse_args():
     parser.add_argument("result_files", nargs="+", help="REF/HYP result files")
     parser.add_argument("--experiment_name", help="Experiment name for summary CSV")
     parser.add_argument("--summary_csv", help="CSV file to create or update")
-    parser.add_argument("--acoustic_config", default="")
+    parser.add_argument("--setting", "--acoustic_config", dest="setting", default="")
+    parser.add_argument("--internal_id", default="")
     parser.add_argument("--decoder", default="")
     parser.add_argument("--validation_wer", default="")
     parser.add_argument("--notes", default="")
@@ -111,7 +113,8 @@ def main():
         if not args.experiment_name:
             raise ValueError("--experiment_name is required with --summary_csv")
         metadata = {
-            "acoustic_config": args.acoustic_config,
+            "setting": args.setting,
+            "internal_id": args.internal_id,
             "decoder": args.decoder,
             "validation_wer": args.validation_wer,
             "notes": args.notes,

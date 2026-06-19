@@ -259,6 +259,10 @@ def tune_decoder(args) -> None:
     best.update(
         {
             "acoustic_checkpoint": args.model_name_or_path,
+            "display_name": (
+                "Staged CTC fine-tuned Wav2Vec2 + beam/trigram LM"
+            ),
+            "internal_id": "H",
             "role": "main_validation_selected_decoder",
             "validation_shards": args.validation_shards,
             "selection_source": "validation_only",

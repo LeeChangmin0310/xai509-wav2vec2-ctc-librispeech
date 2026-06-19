@@ -1,29 +1,28 @@
-# Post-final Wav2Vec2-base Exploratory Results
+# Post-final Wav2Vec2-CTC Exploratory Results
 
-These post-final experiments do not replace the main reproducible result. They
-use the same unsupervised `facebook/wav2vec2-base` source and the frozen main
-decoder; no supervised LibriSpeech ASR checkpoint is used.
+These experiments extend the selected Staged CTC Fine-tuning recipe after the
+main reproducible result was finalized.
 
-## H all-train
+## Staged CTC All-Train Model
 
-The fixed H schedule was trained on all five train shards: 10 head-only epochs
-followed by 40 encoder-training epochs. Because every train shard was used,
-there is no untouched in-domain validation split and the fixed final epoch was
-retained.
+The fixed staged schedule was trained on all five train shards: 10 head-only
+epochs followed by 40 encoder fine-tuning epochs. Because every train shard was
+used, there is no untouched in-domain validation split and the fixed final
+epoch was retained.
 
-| Experiment | test-clean WER | test-other WER |
+| Setting | test-clean WER | test-other WER |
 | --- | ---: | ---: |
-| H all-train | 0.216867 | 0.303307 |
+| Staged CTC All-Train Model | 0.216867 | 0.303307 |
 
-## H-fold ROVER ensemble
+## Staged CTC Fold Ensemble with ROVER Voting
 
-Five H fold models were combined with deterministic word-alignment voting.
+Five staged fine-tuning fold models were combined with deterministic
+word-alignment voting.
 
-| Experiment | test-clean WER | test-other WER |
+| Setting | test-clean WER | test-other WER |
 | --- | ---: | ---: |
-| H-fold ROVER ensemble | 0.197314 | 0.271383 |
+| Staged CTC Fold Ensemble with ROVER Voting | 0.197314 | 0.271383 |
 
-The ROVER ensemble is the best observed exploratory result, but it is report
-only. Folds 0–3 trained on shard `000004`; only fold 4 held it out. The
-validation WER used to choose the ensemble method is therefore leaked and
-optimistic rather than an unbiased held-out estimate.
+The ROVER system gives the best observed test WER, but it remains exploratory.
+Folds 0–3 trained on shard `000004`, while only fold 4 held it out, so the
+ensemble’s validation selection is affected by fold-membership leakage.

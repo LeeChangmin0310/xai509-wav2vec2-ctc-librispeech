@@ -31,6 +31,7 @@ runs/
 .DS_Store
 
 # Presentation exports
+docs/PRESENTATION.md
 *.pptx
 *.key
 *.pdf

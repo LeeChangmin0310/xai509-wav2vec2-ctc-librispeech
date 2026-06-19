@@ -5,6 +5,8 @@
   "beam_width": 50,
   "beta": 1.5,
   "decoding_method": "beam_lm",
+  "display_name": "Staged CTC fine-tuned Wav2Vec2 + beam/trigram LM",
+  "internal_id": "H",
   "language_model_path": "outputs/strict_final/train_text_trigram_lm.json",
   "role": "main_validation_selected_decoder",
   "selection_source": "validation_only",

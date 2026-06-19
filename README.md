@@ -149,5 +149,3 @@ SpecAugment stabilization, acoustic model comparison, decoder tuning, final
 results, and limitations—is in
 [docs/EXPERIMENT_SUMMARY.md](docs/EXPERIMENT_SUMMARY.md).
 
-The presentation-oriented framing and nine-slide outline are in
-[docs/PRESENTATION_NARRATIVE.md](docs/PRESENTATION_NARRATIVE.md).

@@ -10,23 +10,32 @@ provided LibriSpeech WebDataset and evaluates word error rate (WER) on
 decoding, language-model fusion, and evaluation pipeline developed for the
 XAI509 Automatic Speech Recognition semester project.
 
+The repository distinguishes two result tracks:
+
+1. The **main reproducible single-model pipeline**, selected with the reserved
+   validation shard.
+2. The **best observed ensemble extension**, which combines fold-specific
+   decoded hypotheses and is reported separately as exploratory.
+
 ## Pipeline overview
 
-The figure below summarizes the best observed ASR pipeline in this project:
-staged CTC fine-tuning across train-shard folds, fixed beam/trigram-LM decoding,
-and ROVER word-level voting.
+The figure below summarizes the best observed ensemble extension: staged CTC
+fine-tuning across train-shard folds, fixed beam/trigram-LM decoding for each
+fold model, and post-decoding ROVER word-level voting.
 
 <p align="center">
-  <img src="docs/assets/asr_pipeline_overview.png" alt="Best observed ASR pipeline overview" width="95%">
+  <img src="docs/assets/asr_pipeline_overview.png" alt="Best observed ASR ensemble extension overview" width="95%">
 </p>
 
 <p align="center">
-  <em>Overview of the best observed exploratory pipeline. The clean main reproducible result is reported separately in the Results section.</em>
+  <em>Overview of the best observed ensemble extension. The main reproducible single-model result is reported separately in the Results section.</em>
 </p>
 
 ## Method
 
-The main approach is **Staged CTC Fine-tuning**. Since the CTC classification layer is newly initialized for the project tokenizer, training is split into two stages. First, only the CTC head is trained while the Wav2Vec2 backbone is frozen. Then, the Transformer encoder is fine-tuned while the low-level convolutional feature extractor remains frozen. This schedule stabilizes early CTC optimization and reduces blank-dominant predictions.:
+The main approach is **Staged CTC Fine-tuning**. Since the CTC classification
+layer is newly initialized for the project tokenizer, training is split into
+two stages:
 
 1. The CTC head is warmed up while the Wav2Vec2 encoder is frozen.
 2. The encoder is fine-tuned while the convolutional feature extractor remains
@@ -125,6 +134,10 @@ DRY_RUN=1 bash scripts/run_exploratory.sh
 The selected main decoder uses beam width 50 with the train-text trigram LM,
 alpha 0.3, and beta 1.5.
 
+ROVER is not a replacement for language-model fusion. Each fold-specific model
+is first decoded with the selected beam/trigram-LM configuration, and ROVER
+then combines the resulting word hypotheses.
+
 The ROVER system gives the best observed test WER, but it is reported as
 exploratory because its validation selection is affected by fold-membership
 leakage.
@@ -135,3 +148,6 @@ The complete experimental narrative—including CTC blank-collapse diagnosis,
 SpecAugment stabilization, acoustic model comparison, decoder tuning, final
 results, and limitations—is in
 [docs/EXPERIMENT_SUMMARY.md](docs/EXPERIMENT_SUMMARY.md).
+
+The presentation-oriented framing and nine-slide outline are in
+[docs/PRESENTATION_NARRATIVE.md](docs/PRESENTATION_NARRATIVE.md).

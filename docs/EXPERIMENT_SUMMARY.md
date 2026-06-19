@@ -64,7 +64,7 @@ likely before encoder parameters begin moving.
 ## Initial blank-collapse diagnosis
 
 `facebook/wav2vec2-base` does not provide a CTC classification layer trained
-for the project vocabulary. Initial learning-rate sweep therefore
+for the project vocabulary. The initial learning-rate sweep therefore
 started with a random CTC head and converged to blank-dominant outputs.
 
 Fold-0 diagnostics for the early variants showed validation WER around `1.0`,
@@ -100,7 +100,31 @@ stable acoustic configurations.
 | Staged CTC refinement run 1 | Post-hoc refinement experiment | Validation WER 0.216123; diagnostic only |
 | Staged CTC refinement run 2 | Alternative post-final refinement diagnostic | Validation WER 0.239367; diagnostic only |
 | Staged CTC All-Train Model | Apply the fixed staged schedule to all five train shards | test-clean 0.216867; test-other 0.303307; exploratory |
-| Staged CTC Fold Ensemble with ROVER Voting | Word-alignment voting across five staged fine-tuning fold models | test-clean 0.197314; test-other 0.271383; best observed exploratory |
+| Staged CTC Fold Ensemble with ROVER Voting | Word-alignment voting across five LM-fused fold hypotheses | test-clean 0.197314; test-other 0.271383; best observed exploratory |
+
+## Fine-tuning search-space coverage
+
+The final recipe was selected after controlled exploration across the main
+training and decoding dimensions:
+
+- **Learning rate:** early lower-LR variants, followed by separated encoder and
+  CTC-head learning rates.
+- **Freezing strategy:** full tuning, feature-extractor freezing, and encoder
+  freezing during CTC-head warmup.
+- **SpecAugment:** default augmentation, augmentation disabled for diagnosis,
+  and the selected weak SpecAugment setting.
+- **Training schedule:** one-stage training, staged CTC-head warmup, and
+  post-final refinement variants.
+- **Decoding:** greedy decoding, beam decoding, and beam decoding with the
+  train-text trigram language model.
+
+Numerically, the experimental coverage included:
+
+- **5** train-shard folds for acoustic comparison.
+- **2** main acoustic recipes in the paired fold comparison.
+- **3** decoder settings evaluated on the reserved validation shard.
+- **5** fold-specific LM-fused hypotheses used by the ROVER ensemble
+  extension.
 
 ## Acoustic model comparison
 
@@ -140,6 +164,18 @@ Plain beam search matched greedy decoding. Shallow fusion with the train-text
 trigram model improved validation WER, so beam width 50, alpha 0.3, and beta
 1.5 were frozen before test decoding.
 
+## Relationship between LM fusion and ROVER
+
+Beam/trigram-LM fusion produces a transcript hypothesis for each individual
+acoustic model. The language model participates during beam decoding and
+improves the word sequence proposed by that model.
+
+ROVER is applied afterward. It takes the decoded word hypotheses from multiple
+fold-specific models, aligns them, and performs deterministic word-level
+voting. ROVER therefore does not replace language-model fusion: the best
+observed ensemble uses five LM-fused fold hypotheses as the inputs to ROVER
+voting.
+
 ## Main result
 
 | Setting | Role | Validation WER | test-clean WER | test-other WER |
@@ -159,11 +195,25 @@ were selected without using the test splits.
 The all-train model applies the fixed staged schedule to all five train shards
 and retains the final epoch, so it has no untouched in-domain validation split.
 
-The ROVER system combines fold hypotheses using deterministic progressive word
-alignment and voting. It gives the best observed test WER, but it is reported
-as exploratory because folds 0–3 trained on shard `000004`; validation
-selection is therefore affected by fold-membership leakage. It is not the
-clean validation-selected main model.
+The ROVER system combines the five LM-fused fold hypotheses using deterministic
+progressive word alignment and voting. It gives the best observed test WER,
+but it is reported as exploratory because folds 0–3 trained on shard `000004`;
+validation selection is therefore affected by fold-membership leakage. It is
+not the clean validation-selected main model.
+
+## Future work beyond this project scope
+
+The following extensions are intentionally outside the scope of the current
+course project:
+
+1. **Stronger language modeling:** larger n-gram language models, external text
+   corpora, or neural language-model rescoring.
+2. **Cleaner ensemble selection:** a separate ensemble-validation split or
+   repeated seed/fold evaluation.
+3. **Larger ASR model families:** Wav2Vec2-large, HuBERT, or Whisper-style
+   baselines.
+4. **Ensemble diversity analysis:** per-utterance error correlation, voting
+   gain, and model-complementarity diagnostics.
 
 ## Interpretation and limitations
 

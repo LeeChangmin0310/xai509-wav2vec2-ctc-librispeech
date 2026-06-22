@@ -67,11 +67,28 @@ likely before encoder parameters begin moving.
 for the project vocabulary. The initial learning-rate sweep therefore
 started with a random CTC head and converged to blank-dominant outputs.
 
-Fold-0 diagnostics for the early variants showed validation WER around `1.0`,
-empty hypotheses for every sample, a blank-token rate of `1.0`, and a
-nonblank-token rate of `0.0`. These results motivated direct inspection of
-logits, labels, CTC lengths, loss finiteness, and train/evaluation mode rather
-than treating the failure as a decoding problem.
+The retained fold-0 diagnostic summary contains four failed checkpoints: two
+checkpoints from early variant A and one checkpoint each from variants B and C.
+All four rows show the same collapse pattern on 56 validation utterances.
+
+**Observed blank-collapse diagnostic pattern in early failed runs**
+
+| Diagnostic | Observed value |
+| --- | ---: |
+| Validation WER | 1.000 |
+| Empty-hypothesis rate | 1.000 (56 / 56 utterances) |
+| Blank-token rate | 1.000 |
+| Nonblank-token rate | 0.000 |
+
+The same records report an average hypothesis length of `0.0` characters and
+`0.0` words. Across 38,888 argmax frame predictions, every predicted token was
+the tokenizer blank/padding token. These results motivated direct inspection
+of logits, labels, CTC lengths, loss finiteness, and train/evaluation mode
+rather than treating the failure as a decoding problem.
+
+The source is the historical compact artifact
+`results/base_strict_cv/fold0_blank_diagnostics_summary.csv` from commit
+`9485021` (identical content is present in the pre-cleanup commit `584aa04`).
 
 ## SpecAugment and stability diagnosis
 
